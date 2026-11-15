@@ -35,3 +35,13 @@ DLRM on Ascend 950DT — 统一表 + EC + index dedup 锚定（8 die, Criteo 1TB
   1. 按档选配置：A2 用 EC+dedup（16.31 ms，108.5% A100）；A1 用 EBC（6.78 ms，147.5% A100）。
   2. A2 已越过 A100 单倍线；距 2x 目标 8.85 ms 还差 84%。
   3. EC+dedup 在小 batch 失效：排序/去重开销 > 通信节省（A1 9.89 vs 6.78）。
+
+六、端到端口径（含 host 取数，200 步/次，2026-11-15 补测）
+  说明：step_time 只统计 forward/backward/step，不含 DataLoader 取数；A100 官方口径含取数，
+        故补一列端到端，避免高估。
+
+  A1 统一表 EBC        ：prep 0.665 ms + step 6.699 ms = 7.364 ms => 278,111 sps = A100 135.8%
+  A2 统一表 EC+dedup   ：prep 1.459 ms + step 15.118 ms = 16.577 ms => 988,362 sps = A100 106.8%
+
+  结论：即便把取数计入，两档仍都超过 A100 一倍线；但距 2x 目标分别差
+        A1 7.364 -> 5.00 ms（-32%）、A2 16.577 -> 8.85 ms（-47%）。
