@@ -169,6 +169,9 @@ def main():
     p.add_argument("--hbm-gb", type=float, default=4.0, help="每张表在 HBM 里预留的容量")
     p.add_argument("--unified-emb", action="store_true",
                    help="统一表：26 个特征共用一张表（id 加 per-feature 偏移），每步只 1 次查表")
+    p.add_argument("--pyprof", type=str, default="",
+                   help="用 torch_npu.profiler 采集到该目录（仅 rank0，导出 kernel_details.csv）")
+    p.add_argument("--pyprof-steps", type=int, default=20, help="active 步数（默认 20）")
     p.add_argument("--probe-graph", action="store_true",
                    help="可行性探针：尝试用 NPUGraph 捕获一步训练并 replay 3 次")
     p.add_argument("--probe-graph-at", type=int, default=3, help="第几步开始捕获（默认 3）")
@@ -438,6 +441,21 @@ def main():
             if is_main:
                 print("[frozen-data] batch cached on NPU: xi=%s values=%s"
                       % (tuple(_xi0.shape), tuple(_kt0.values().shape)), flush=True)
+        _prof = None
+        if args.pyprof and is_main:
+            import torch_npu.profiler as _P
+            _prof = _P.profile(
+                activities=[_P.ProfilerActivity.CPU, _P.ProfilerActivity.NPU],
+                schedule=_P.schedule(wait=1, warmup=2, active=args.pyprof_steps, repeat=1),
+                on_trace_ready=_P.tensorboard_trace_handler(args.pyprof),
+                experimental_config=_P._ExperimentalConfig(
+                    profiler_level=_P.ProfilerLevel.Level1,
+                    export_type=[_P.ExportType.Text]),
+                profile_memory=False, record_shapes=False,
+            )
+            _prof.start()
+            log("[pyprof] 采集到 %s（active=%d 步）" % (args.pyprof, args.pyprof_steps))
+
         for ep in range(epochs):
             for bi, xi, kt_, label in ds.iter_batches(
                     "train", args.batch_size, rank=rank, world_size=world_size,
@@ -493,6 +511,11 @@ def main():
                     print("ep%d step %5d/%d  loss=%.6f acc=%.4f  %.2f ms"
                           % (ep, bi + 1, nb, loss.item(), acc, dt * 1000), flush=True)
 
+                if _prof is not None:
+                    try:
+                        _prof.step()
+                    except Exception:
+                        _prof = None
                 step_global += 1
                 if args.steps > 0 and step_global >= args.steps:
                     stop = True
@@ -550,6 +573,15 @@ def main():
                 print("[csv] wrote %s" % args.csv, flush=True)
         except Exception as _e:
             print("[csv] fail %s" % _e, flush=True)
+    if _prof is not None:
+        _prof.stop()
+        log("[pyprof] 已停止，导出目录 %s" % args.pyprof)
+    _prep = getattr(ds, "prep_s", [])
+    if _prep and is_main:
+        import statistics as _st
+        _p = _prep[args.warmup:] if len(_prep) > args.warmup else _prep
+        print("prep_ms       = median=%.3f mean=%.3f max=%.3f  (host 取数+搬数，未计入 step_time)"
+              % (_st.median(_p) * 1000, sum(_p) / len(_p) * 1000, max(_p) * 1000), flush=True)
     steady = step_times[args.warmup:]
     if is_main:
         import statistics as st

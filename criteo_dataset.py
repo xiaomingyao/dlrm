@@ -17,6 +17,7 @@
 
 import os
 
+import time
 import numpy as np
 import torch
 import torch_npu  # noqa: F401  必须在 torchrec 之前导入，torchrec 依赖 torch_npu 的私有后端
@@ -142,7 +143,9 @@ class CriteoDataset:
             rng.shuffle(order)
 
         local_bs = batch_size // world_size
+        self.prep_s = []            # 每步 host 侧取数+搬数耗时（不含模型执行）
         for bi in range(nb):
+            _tp = time.time()
             idx = order[bi * batch_size:(bi + 1) * batch_size]
             # global batch 均分给各 rank
             lo = rank * local_bs
@@ -191,6 +194,7 @@ class CriteoDataset:
                                      device=values.device)
                 keys = ["cate_%d" % f for f in range(NUM_FIELDS)]
             kt = torchrec.KeyedJaggedTensor(keys=keys, values=values, lengths=lengths)
+            self.prep_s.append(time.time() - _tp)
 
             yield bi, xi, kt, yy
 
