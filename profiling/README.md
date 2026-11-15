@@ -9,6 +9,8 @@
 | `stage0_a2_16384.md` | A2 档（global 16,384）单步分解诊断：空转 / 稀疏反向 / 通信 / 稠密，含归因与已排除项 | msprof 包 8 rank、20 步；rank0/device_0 |
 | `stage0_a2_16384.csv` | 上表的机器可读版（项、每步 ms、占 wall、调用次数、单次耗时） | 同上 |
 | `hccl_a2_16384.csv` | HCCL 分项（reduceScatter / alltoall / HcclLaunch / allReduce / allGather / alltoallv） | 同上 |
+| `stage1_unified_a2_16384.md` | 统一表后同档分解：查表 15.05→3.41 ms，空转+等待占 80%，通信并集仅 1.69 ms |
+| `op_top_k.csv` | 算子 top25（time/count），由 `tools/publish.sh` 自动从 msprof `op_statistic` 提取 | 
 | `fit_fixed_vs_var.md` | 「固定项 + 每样本项」线性拟合（A1/A2 本轮 n=3 实测），用于判断优化该打哪一轴 | 无 profiler 的 runner |
 
 ## 复现

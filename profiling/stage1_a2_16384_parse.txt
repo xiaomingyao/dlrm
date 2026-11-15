@@ -1,0 +1,45 @@
+file = /tmp/prof_u4/PROF_000001_20261115190806100_01149847LOIFQRQP/mindstudio_profiler_output/task_time_20261115191251.csv
+cols = ['Device_id', 'kernel_name', 'kernel_type', 'stream_id', 'task_id', 'task_time(us)', 'task_start(us)', 'task_stop(us)']
+device = 5  任务数 = 645690
+窗口用 lookup kernel 定义：20 次
+
+窗口 504.4 ms / 20 步 = 25.220 ms/步
+busy 264.0 ms = 13.200 ms/步 (52.3%)
+idle 240.4 ms = 12.019 ms/步 (47.7%)
+
+kernel                                                 ms/step   %wall   calls  us/call
+<NOTIFY_WAIT_SQE>                                       36.072   143.0   343.3      105
+<UBDMA>                                                  8.377    33.2   264.2       32
+<DAVID_EVENT_WAIT>                                       7.805    30.9    10.8      723
+<NOTIFY_WAIT>                                            6.364    25.2     5.9     1079
+_Z25lookup_backward_v2_kernelIlDv2_fLb0ELb1EEvPT0_       3.413    13.5     1.0     3413
+HcclLaunchAicpuKernel                                    1.872     7.4     5.9      317
+MatMulV3_ND_ND_ND_ND_FP32_FP32_FP32_FP32_high_perf       0.431     1.7     5.7       76
+MatMulV3_ND_ND_ND_ND_FP32_FP32_FP32_FP32_high_perf       0.431     1.7     7.6       57
+MatMulV3_ND_ND_ND_ND_FP32_FP32_FP32_FP32_high_perf       0.429     1.7     5.7       75
+pooling_embeddings_23                                    0.316     1.3     0.9      333
+_ZN7dyn_emb37fill_output_with_table_vectors_kernel       0.252     1.0     0.9      265
+Slice_82e6b4faea71b451f217d7ea57c08012_high_perfor       0.209     0.8    25.6        8
+RealDiv_FLOAT32_high_precision_8                         0.206     0.8     0.9      217
+OnesLike                                                 0.157     0.6     0.9      165
+ConcatD_ddafbeaeee4ee3a848734c13e000266d3_high_per       0.122     0.5     0.9      128
+<SDMA_SQE>                                               0.102     0.4    36.1        3
+
+按 kernel_type（求和，非并集）：
+  NOTIFY_WAIT_SQE            36.072 ms/步
+  UBDMA                       8.377 ms/步
+  DAVID_EVENT_WAIT            7.805 ms/步
+  NOTIFY_WAIT                 6.364 ms/步
+  AI_VECTOR_CORE              5.066 ms/步
+  AI_CPU                      2.069 ms/步
+  AI_CORE                     1.366 ms/步
+  MIX_AIV                     0.175 ms/步
+  SDMA_SQE                    0.102 ms/步
+  MIX_AIC                     0.017 ms/步
+
+分类并集（同一时刻多类可重叠，占比之和可 >100%）：
+  compute    6.623 ms/步    26.3% wall
+  comm       1.688 ms/步     6.7% wall
+  aicpu      2.069 ms/步     8.2% wall
+  wait       8.145 ms/步    32.3% wall
+  other      0.009 ms/步     0.0% wall

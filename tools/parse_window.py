@@ -36,8 +36,8 @@ c_dev = pick("device_id")
 c_name = pick("kernel_name") or pick("name")
 c_type = pick("kernel_type")
 c_dur = pick("task_time(us)", "task_time", "duration_time", "dur")
-c_start = pick("start_time(us)", "start_time", "ts")
-c_stop = pick("stop_time(us)", "stop_time")
+c_start = pick("task_start(us)", "start_time(us)", "start_time", "ts")
+c_stop = pick("task_stop(us)", "stop_time(us)", "stop_time")
 if not (c_dev and c_dur and c_start):
     sys.exit(f"列不匹配: {cols}")
 
@@ -96,3 +96,36 @@ for r in win:
 print("\n按 kernel_type（求和，非并集）：")
 for k, t in sorted(by_type.items(), key=lambda x: -x[1])[:10]:
     print(f"  {k:24s}{t/1000/steps:9.3f} ms/步")
+
+# ---- 分类并集：计算 / 通信 / 等待 ----
+def classify(ktype: str, kname: str) -> str:
+    k = (ktype or "").upper(); n = (kname or "").upper()
+    if "WAIT" in k or "WAIT" in n:
+        return "wait"
+    if any(x in k for x in ("UBDMA", "SDMA", "RDMA", "HCCL")):
+        return "comm"
+    if "AI_CPU" in k or "AICPU" in k:
+        return "aicpu"
+    if any(x in k for x in ("AI_CORE", "AI_VECTOR", "MIX_", "AIV", "AIC")):
+        return "compute"
+    return "other"
+
+buckets = collections.defaultdict(list)
+for r in win:
+    buckets[classify(r[2], r[1])].append((r[4], r[5]))
+
+def union_ms(iv):
+    if not iv: return 0.0
+    iv = sorted(iv); m = []
+    for s, e in iv:
+        if m and s <= m[-1][1]:
+            m[-1][1] = max(m[-1][1], e)
+        else:
+            m.append([s, e])
+    return sum(e - s for s, e in m) / 1000.0
+
+print("\n分类并集（同一时刻多类可重叠，占比之和可 >100%）：")
+for k in ("compute", "comm", "aicpu", "wait", "other"):
+    ms = union_ms(buckets.get(k, []))
+    if ms:
+        print(f"  {k:8s}{ms/steps:8.3f} ms/步  {ms/wall_ms*100:6.1f}% wall")
