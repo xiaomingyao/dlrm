@@ -67,9 +67,17 @@ class CriteoDataset:
         if verbose:
             print("[data] loading train days %s" % (list(train_days),), flush=True)
         self.Xi_tr, self.Xc_tr, self.y_tr = load_days(data_dir, train_days, verbose)
+        # 一次性把 dtype/变换固化：每步只做切片拷贝，避免 batch 内 log1p+astype 的 host 开销
+        # （实测 131k 档每步取数 12.5 ms，其中大半是这两步）
+        self.Xi_tr = np.log1p(self.Xi_tr.astype(np.float32)).astype(np.float32, copy=False)
+        self.Xc_tr = self.Xc_tr.astype(np.int64, copy=False)
+        self.y_tr = self.y_tr.astype(np.float32, copy=False)
         if verbose:
             print("[data] loading test days %s" % (list(test_days),), flush=True)
         self.Xi_te, self.Xc_te, self.y_te = load_days(data_dir, test_days, verbose)
+        self.Xi_te = np.log1p(self.Xi_te.astype(np.float32)).astype(np.float32, copy=False)
+        self.Xc_te = self.Xc_te.astype(np.int64, copy=False)
+        self.y_te = self.y_te.astype(np.float32, copy=False)
 
         # 真实 cardinality（不 2 幂对齐，保留原始值用于报告）
         self.raw_cardinalities = []
@@ -157,10 +165,9 @@ class CriteoDataset:
             # 稠密特征 log1p 变换：Criteo 原始计数跨度 0 ~ 1.6e6（col4 max=1618112,
             # 均值 1.6e4），直接送 MLP 会让 logits 爆到 1e2~1e13 并立刻 NaN。
             # 官方 dlrm_data_pytorch.py 同样用 log1p 处理 dense 特征。
-            xi_np = np.log1p(Xi[idx].astype(np.float64))
-            xi = torch.from_numpy(xi_np.astype(np.float32))
-            xc = torch.from_numpy(Xc[idx].astype(np.int64))   # (B, 26)
-            yy = torch.from_numpy(Y[idx].astype(np.float32))
+            xi = torch.from_numpy(np.ascontiguousarray(Xi[idx]))   # 已是 float32 + log1p
+            xc = torch.from_numpy(np.ascontiguousarray(Xc[idx]))   # (B, 26) int64
+            yy = torch.from_numpy(np.ascontiguousarray(Y[idx]))
 
             if device != "cpu":
                 xi = xi.to(device)

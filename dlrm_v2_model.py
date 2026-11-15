@@ -89,9 +89,11 @@ class DLRMv2(nn.Module):
     """
 
     def __init__(self, num_dense, sparse_configs, emb_dim, bot_dims, top_dims,
-                 num_sparse=None, ec_mode=False):
+                 num_sparse=None, ec_mode=False, overlap_dense=False):
         super().__init__()
         self.ec_mode = bool(ec_mode)
+        self.overlap_dense = bool(overlap_dense)
+        self._side = None
         self.num_dense = num_dense
         # 统一表模式下一张表承载全部特征，特征数必须外部给定（见 build_unified_sparse_config）
         self.num_sparse = len(sparse_configs) if num_sparse is None else int(num_sparse)
@@ -124,6 +126,23 @@ class DLRMv2(nn.Module):
         dense_x        : (B, num_dense) float
         sparse_features: KeyedJaggedTensor
         """
+        if self.overlap_dense:
+            # bottom MLP 只依赖稠密特征，可与稀疏侧 all2all/查表并行；用独立 stream 发起，
+            # 在拼接前用 event 对齐。设备空转 64% 的场景里，这段能盖住部分通信时间。
+            import torch as _t
+            if self._side is None:
+                self._side = _t.npu.Stream()
+            _ev0 = _t.npu.Event()
+            _ev0.record(_t.npu.current_stream())
+            with _t.npu.stream(self._side):
+                self._side.wait_event(_ev0)
+                _bot = self.bot_l(dense_x)
+                _ev1 = _t.npu.Event()
+                _ev1.record(self._side)
+        else:
+            _bot = None
+            _ev1 = None
+
         if self.ec_mode:
             ec_out = self.ec(sparse_features)
             # EC 返回 KeyedTensor：.values() 是 {feature: tensor}（单特征时只有一个）
@@ -144,7 +163,11 @@ class DLRMv2(nn.Module):
             flat = ebc_out.values()                             # (B, num_sparse*emb_dim)
         emb_out = flat.view(-1, self.num_sparse, self.emb_dim)
 
-        dense_emb = self.bot_l(dense_x)                         # (B, D)
+        if _bot is not None:
+            torch.npu.current_stream().wait_event(_ev1)         # 等 side stream 上的 bottom MLP
+            dense_emb = _bot
+        else:
+            dense_emb = self.bot_l(dense_x)                     # (B, D)
         feats = torch.cat([dense_emb.unsqueeze(1), emb_out], dim=1)  # (B, F, D)
         inter = dot_interaction(feats)                          # (B, F*F)
         top_in = torch.cat([dense_emb, inter], dim=1)           # (B, D + F*F)

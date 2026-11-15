@@ -175,6 +175,8 @@ def main():
     p.add_argument("--probe-graph", action="store_true",
                    help="可行性探针：尝试用 NPUGraph 捕获一步训练并 replay 3 次")
     p.add_argument("--probe-graph-at", type=int, default=3, help="第几步开始捕获（默认 3）")
+    p.add_argument("--overlap-dense", action="store_true",
+                   help="bottom MLP 走独立 stream，与稀疏侧通信/查表重叠")
     p.add_argument("--ec-mode", action="store_true",
                    help="EC 模式：26 特征打包成 1 个特征（每样本 26 值），配合 --unified-emb 使用")
     p.add_argument("--index-dedup", action="store_true",
@@ -327,6 +329,7 @@ def main():
         sparse_configs=eb_configs,
         num_sparse=args.num_sparse,
         ec_mode=args.ec_mode,
+        overlap_dense=args.overlap_dense,
         emb_dim=args.emb_dim,
         bot_dims=parse_dims(args.bot_dims),
         top_dims=parse_dims(args.top_dims),
