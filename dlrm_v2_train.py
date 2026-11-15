@@ -179,6 +179,8 @@ def main():
                    help="bottom MLP 走独立 stream，与稀疏侧通信/查表重叠")
     p.add_argument("--ec-mode", action="store_true",
                    help="EC 模式：26 特征打包成 1 个特征（每样本 26 值），配合 --unified-emb 使用")
+    p.add_argument("--bf16-comm", action="store_true",
+                   help="all2all 载荷用 bf16 编解码（通信字节减半，精度需复核）")
     p.add_argument("--index-dedup", action="store_true",
                    help="EC 模式下按唯一 id 收发（use_index_dedup）")
     p.add_argument("--unified-align", choices=["pow2", "batch"], default="pow2",
@@ -317,12 +319,47 @@ def main():
     if args.dist_type:
         fused_params["dist_type"] = args.dist_type
         log("[dist_type] =", args.dist_type)
+    _qcomm = None
+    if args.bf16_comm:
+        # 通信载荷 bf16：all2all 字节减半。EC 路径对应 SEQUENCE_EMBEDDINGS_ALL_TO_ALL。
+        from torchrec.distributed.types import QuantizedCommCodecs, CommOp
+
+        class _BF16Codec:                      # 鸭子类型，接口对齐 QuantizedCommCodec
+            def encode(self, t, ctx=None):
+                return t.to(torch.bfloat16)
+
+            def decode(self, t, ctx=None):
+                return t.to(torch.float32)
+
+            def quantized_dtype(self):
+                return torch.bfloat16
+
+            def calc_quantized_size(self, input_len, ctx=None):
+                return int(input_len)
+
+            def create_context(self):
+                return None
+
+            def padded_size(self, t, dim_per_rank, my_rank, ctx):
+                return (t.shape[0] if t.dim() == 1 else t.shape[1]), 0
+
+        _c = _BF16Codec()
+        _qcomm = {
+            CommOp.SEQUENCE_EMBEDDINGS_ALL_TO_ALL.value:
+                QuantizedCommCodecs(forward=_c, backward=_c),
+            CommOp.POOLED_EMBEDDINGS_ALL_TO_ALL.value:
+                QuantizedCommCodecs(forward=_c, backward=_c),
+        }
+        log("[bf16-comm] all2all 载荷 bf16 编解码已启用")
+
     if args.ec_mode:
         sharder = DynamicEmbeddingCollectionSharder(
-            fused_params=fused_params, use_index_dedup=bool(args.index_dedup))
+            fused_params=fused_params, use_index_dedup=bool(args.index_dedup),
+            qcomm_codecs_registry=_qcomm)
         log("[ec-mode] 单特征打包 + use_index_dedup=%s" % bool(args.index_dedup))
     else:
-        sharder = DynamicEmbeddingBagCollectionSharder(fused_params=fused_params)
+        sharder = DynamicEmbeddingBagCollectionSharder(
+            fused_params=fused_params, qcomm_codecs_registry=_qcomm)
 
     model_ebc = DLRMv2(
         num_dense=args.num_dense,
