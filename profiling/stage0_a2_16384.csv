@@ -1,0 +1,10 @@
+item,ms_per_step,pct_of_wall,calls_per_step,per_call
+空转_idle,12.8,29.8,,
+稀疏反向_lookup_backward_v2,15.05,35.1,24,615us
+HCCL_合计,9.51,22.2,6-7,
+其余_device,5.54,12.9,~500,
+device_busy_合计,30.1,70.3,536,
+其余_MatMulV3,1.31,3.1,3形状,
+其余_pooling_embeddings,0.54,1.3,,
+其余_Sort,0.52,1.2,,
+其余_Cumsum,0.2,0.5,,

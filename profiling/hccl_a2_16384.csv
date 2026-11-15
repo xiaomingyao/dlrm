@@ -1,0 +1,8 @@
+op,ms_per_step,note
+reduceScatter,3.57,数据搬运
+alltoall,2.17,数据搬运
+HcclLaunch,1.95,纯发射开销，6 次
+allReduce,0.76,
+allGather,0.58,
+alltoallv,0.48,
+TOTAL,9.51,

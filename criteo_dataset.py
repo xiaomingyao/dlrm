@@ -104,6 +104,20 @@ class CriteoDataset:
         self.cardinalities = aligned
         return aligned
 
+    def enable_unified_ids(self, vocab_sizes):
+        """为统一表模式准备 per-feature id 偏移（各特征落在互不重叠的行区间）。
+
+        返回总行数（未对齐）；调用方负责向上取 2 的幂后建表。
+        """
+        off = np.zeros(NUM_FIELDS, dtype=np.int64)
+        acc = 0
+        for f in range(NUM_FIELDS):
+            off[f] = acc
+            acc += int(vocab_sizes[f])
+        self.offsets = torch.from_numpy(off)
+        self.unified_total = acc
+        return acc
+
     def num_batches(self, split, batch_size, drop_last=True):
         n = len(self.y_tr) if split == "train" else len(self.y_te)
         return n // batch_size if drop_last else (n + batch_size - 1) // batch_size
@@ -152,6 +166,10 @@ class CriteoDataset:
             # KeyedJaggedTensor：26 个特征 × 每样本 1 个值，按特征拼接
             vals = [xc[:, f].contiguous() for f in range(NUM_FIELDS)]
             values = torch.cat(vals, 0)
+            # 统一表模式：feature-major 布局（NUM_FIELDS × local_bs）+ per-feature 偏移
+            if getattr(self, "offsets", None) is not None:
+                off = self.offsets.to(values.device)
+                values = (values.view(NUM_FIELDS, local_bs) + off.unsqueeze(1)).reshape(-1)
             if device != "cpu":
                 values = values.to(device)
             # ⚠ lengths 必须是 int64（torch.long）**且** 与 values 同 device。

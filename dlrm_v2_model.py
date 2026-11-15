@@ -88,10 +88,12 @@ class DLRMv2(nn.Module):
     HKV 动态稀疏表（RecSDK v2 的 dynamic_emb sharder）。
     """
 
-    def __init__(self, num_dense, sparse_configs, emb_dim, bot_dims, top_dims):
+    def __init__(self, num_dense, sparse_configs, emb_dim, bot_dims, top_dims,
+                 num_sparse=None):
         super().__init__()
         self.num_dense = num_dense
-        self.num_sparse = len(sparse_configs)
+        # 统一表模式下一张表承载全部特征，特征数必须外部给定（见 build_unified_sparse_config）
+        self.num_sparse = len(sparse_configs) if num_sparse is None else int(num_sparse)
         self.emb_dim = emb_dim
         # n_vec = num_sparse + 1（dense embedding 向量也算一个"特征"）
         self.n_vec = self.num_sparse + 1
@@ -136,4 +138,22 @@ def build_sparse_configs(num_sparse, num_embeddings_per_table, emb_dim, prefix="
             feature_names=["cate_%d" % i],
         )
         for i in range(num_sparse)
+    ]
+
+
+def build_unified_sparse_config(num_sparse, total_rows, emb_dim, name="t_unified"):
+    """统一表：26 个特征共用一张表（id 由数据侧加 per-feature 偏移）。
+
+    动机（实测 A2 档 42.90 ms/步）：每表一次 lookup_backward_v2，24 次 × 615 us
+    = 15.05 ms，占 35%。合并成一张表后每步只剩 1 次查表，且 collective 分组数
+    同步减少。等价性：各特征 id 落在互不重叠的行区间，行间无耦合，数学上与原
+    26 表完全一致（仅随机初始化顺序不同）。
+    """
+    return [
+        torchrec.EmbeddingBagConfig(
+            name=name,
+            embedding_dim=emb_dim,
+            num_embeddings=int(total_rows),
+            feature_names=["cate_%d" % i for i in range(num_sparse)],
+        )
     ]

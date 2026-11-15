@@ -37,8 +37,8 @@ from torchrec.distributed.model_parallel import DistributedModelParallel
 from torchrec.distributed.planner import Topology
 from torchrec.distributed.types import ShardingType
 
-from criteo_dataset import CriteoDataset
-from dlrm_v2_model import DLRMv2, build_sparse_configs
+from criteo_dataset import CriteoDataset, _next_pow2
+from dlrm_v2_model import DLRMv2, build_sparse_configs, build_unified_sparse_config
 
 
 def make_kt(batch_size, num_sparse, vocab_sizes, device, seed=None):
@@ -165,6 +165,8 @@ def main():
     p.add_argument("--warmup", type=int, default=5, help="统计时跳过的前若干步")
     p.add_argument("--lr", type=float, default=0.05)
     p.add_argument("--hbm-gb", type=float, default=4.0, help="每张表在 HBM 里预留的容量")
+    p.add_argument("--unified-emb", action="store_true",
+                   help="统一表：26 个特征共用一张表（id 加 per-feature 偏移），每步只 1 次查表")
     p.add_argument("--data-dir", type=str,
                    default=os.environ.get("DLRM_DATA_DIR", "./data/criteo_pt"))
     p.add_argument("--data", type=str, default="criteo", choices=["criteo", "synth"],
@@ -257,7 +259,14 @@ def main():
     else:
         vocab_sizes = [args.vocab_size] * args.num_sparse
 
-    eb_configs = build_sparse_configs(args.num_sparse, vocab_sizes, args.emb_dim)
+    if args.unified_emb:
+        total_rows = ds.enable_unified_ids(vocab_sizes)
+        eb_configs = build_unified_sparse_config(
+            args.num_sparse, _next_pow2(total_rows), args.emb_dim)
+        log("[unified] 26 表合 1：rows=%d (raw %d, 对齐后 %d)"
+            % (eb_configs[0].num_embeddings, total_rows, _next_pow2(total_rows)))
+    else:
+        eb_configs = build_sparse_configs(args.num_sparse, vocab_sizes, args.emb_dim)
 
     # ---- planner ----
     # local_hbm_for_values 是「每张表、每卡」的本地 HBM 配额，不是总量。
@@ -265,7 +274,10 @@ def main():
     # ⚠ planner 的 batch_size 必须是**每卡 local batch**，不是全局 batch。
     # 传全局会让 enumerator 算出 8 倍于实际的 per-rank 表容量，导致
     # num_embeddings//batch_size 的整除约束按错误的 batch 校验。
-    per_table_bytes = int(args.hbm_gb * 1024 ** 3 / args.num_sparse)
+    if args.unified_emb:
+        per_table_bytes = int(args.hbm_gb * 1024 ** 3)          # 单表，整包预算
+    else:
+        per_table_bytes = int(args.hbm_gb * 1024 ** 3 / args.num_sparse)
     planner = build_planner(world_size, device.type, eb_configs, local_bs_pre, per_table_bytes)
 
     fused_params = {
@@ -282,6 +294,7 @@ def main():
     model_ebc = DLRMv2(
         num_dense=args.num_dense,
         sparse_configs=eb_configs,
+        num_sparse=args.num_sparse,
         emb_dim=args.emb_dim,
         bot_dims=parse_dims(args.bot_dims),
         top_dims=parse_dims(args.top_dims),
