@@ -1,6 +1,17 @@
-# dlrm950 —— HKV 动态表的 DLRM 实现
+# dlrm950 —— 昇腾 950 上的 DLRM（HKV 动态表）
 
-RecSDK 自研稀疏侧（`dynamic_emb` + HKV 动态表）的 DLRM v2 实现，用于和 `recsdk-examples/` 里的 TorchRec 静态 TBE 版本做同机对照。
+基于 RecSDK 自研稀疏侧（`dynamic_emb` + HKV 动态表）的 DLRM v2 实现。**本目录的目标不是"能跑"，而是把昇腾 950 做成 A100 的可替代训练平台**，因此按四条能力逐一给出目标、当前实测与差距。
+
+## 项目目标与现状
+
+| # | 目标 | 状态 | 关键数字 | 差距 / 下一步判据 |
+|---|---|---|---|---|
+| 1 | **移植**：DLRM 在 950 上可训练 | ✅ 单机 8 die 跑通 | 300 步无中断，loss 单调下降，test AUC 0.7525（150 步链路值） | — |
+| 2 | **高性能**：对比 8×A100 更优 | 🟡 进行中 | 16384 档 42.90 ms / 378,798 sps = A100 的 **41%**；2048 档 24.26 ms / 82,988 sps = **41%** | 目标 ≤17.7 ms（超过 A100 925,696 sps）；先做 P1/P3 |
+| 3 | **线性扩展**：单机 8 die → 多机 | 🔴 未验证 | 仅单机 8 die 有数据 | 判据：8→16 die 扩展比 ≥1.6（效率 ≥80%），见 §3 |
+| 4 | **高性能 HKV** | 🟡 已量化，未优化 | 单步 `lookup_backward_v2_kernel` 15.05 ms（35%），24 次/步、615 µs/次 | 目标 ≤9 ms；判据见 §2.4 P1 |
+
+A100 数据取自 facebook `torchrec_dlrm` README 的 Preliminary Training Results（8×A100 40GB、Criteo 1TB、collective emb 104.54 GiB、dot 交互）；本机用同一份 Criteo 1TB 日志的 112.3 M 行切片 + MLPerf 词表（≈104 GiB）复测。
 
 ## 目录
 
@@ -9,36 +20,100 @@ RecSDK 自研稀疏侧（`dynamic_emb` + HKV 动态表）的 DLRM v2 实现，�
 | `dlrm_v2_train.py` | 训练入口：建表（HKV 分片规划）、数据加载、训练/评测循环、逐步耗时统计 |
 | `dlrm_v2_model.py` | 模型：bottom MLP(512-256) + 26 表 embedding + dot 交互 + top MLP(1024-1024-512-256) |
 | `criteo_dataset.py` | 数据：读取 `dac_sample_day_{i}_processed.npz`，按 2 的幂对齐表容量 |
-| `tools/p2_no_step_sync.py` | 生成"去逐步同步"版本（每 N 步一次 `npu.synchronize()`，用于纠正计时口径） |
+| `tools/p2_no_step_sync.py` | 生成"按 N 步同步"的版本（`--sync-every`），用于验证同步节奏 |
 | `tools/parse_msprof.py` | 解析 msprof `op_summary*.csv`，按训练窗口输出每步预算 |
 
-## 依赖
+## 1. 移植（已达成）
 
-```
-torch 2.7.1+cpu · torch_npu 2.7.1.post4
-torchrec 1.2.0+npu · dynamic_emb · fbgemm_ascend 1.2.0
-CANN 9.1.0 · Ascend950DT（8 die / 单 die 96 GiB HBM）
-```
+| 项 | 内容 |
+|---|---|
+| 环境 | CANN 9.1.0 · Ascend950DT ×8 die（单 die 96 GiB HBM）· torch 2.7.1+cpu / torch_npu 2.7.1.post4 · torchrec 1.2.0+npu · fbgemm_ascend 1.2.0 · `dynamic_emb` |
+| 启动 | `torchrun --nproc_per_node=8`，HCCL 建组 |
+| 已解决的三个坑 | ① HCCL 不支持 object collective → planner 的 `broadcast_object_list` 走 gloo 子组；② 表容量需 `% batch_size == 0` 且向上对齐 2 的幂；③ `--dist-type` 决定 key→rank 映射（默认 continuous） |
+| 验收 | 300 步无中断、loss 单调下降、失败即 `RESULT: FAIL` |
 
-## 数据
+## 2. 高性能（进行中）
 
-输入为 npz，每天一个文件 `dac_sample_day_{i}_processed.npz`，含三件套：
+### 2.1 现状对 A100
+
+| local BS（global） | 本实现 | A100 ×8 | 达成率 |
+|---|---:|---:|---:|
+| 256（2,048） | 24.26 ms / 82,988 sps | 10.00 ms / 204,800 sps | 41% |
+| 2,048（16,384） | 42.90 ms / 378,798 sps | 17.70 ms / 925,696 sps | 41% |
+
+线性拟合（1024/2048/16384 三点）：本实现 **22.0 ms 固定 + 1.273 µs/样本**；A100 **8.90 ms + 0.537 µs/样本**。
+16384 档差距 25.2 ms = 固定项 13.1 ms（52%）+ 每样本项 12.1 ms（48%）。
+
+### 2.2 单步预算（msprof，16384 档）
+
+| 项 | 每步 | 占 wall | 说明 |
+|---|---:|---:|---|
+| idle（设备空转） | 12.80 ms | 29.8% | 非设备执行时间 |
+| HKV 反向 lookup | 15.05 ms | 35.1% | 24 次/步，615 µs/次 |
+| HCCL 合计 | 9.51 ms | 22.2% | reduceScatter 3.57 / alltoall 2.17 / launch 1.95 |
+| 其余 device | 5.54 ms | 12.9% | MatMul 1.31 / pooling 0.54 / Sort 0.52 |
+
+### 2.3 已完成实验：同步节奏（P2）
+
+| 配置 | sync 间隔 | median 步时 | 相对同脚本对照 |
+|---|---:|---:|---:|
+| 16,384 | 1（原始） | 45.23 ms | — |
+| 16,384 | 2 / 4 / 8 | 44.06 / 44.38 / 44.92 ms | −2.6% / −1.9% / −0.7% |
+| 16,384 | 50 | **67.43 ms** | **+49%（更差）** |
+| 2,048 | 1（原始） | 23.69 ms | — |
+| 2,048 | 4 | **22.00 ms** | **−7.1%** |
+
+结论：per-step 同步不是 idle 的来源（1/2/4/8 差异 <1.2 ms）；但同步间隔拉到 50 步会让 host 超前下发、队列积压，反而慢 49% 且抖动变大（std 10.9 ms）。**"去掉同步" ≠ "流水起来"**。
+
+### 2.4 下一步（按实测收益排序）
+
+| 编号 | 动作 | 现状→目标 | 判据 |
+|---|---|---|---|
+| P1 | HKV 反向 lookup：`--dist-type` 对比、bucket 容量、batched-backward 能否替代 24 次逐表调用 | 15.05 → 9.0 ms | 该 kernel ≤9 ms 且调用次数 ≤8 |
+| P3 | 训练步 aclgraph / npugraph_ex 捕获（静态 shape、无控制流） | idle 12.80 → 6.0 ms | 捕获成功且步时不退化 |
+| P4 | HCCL：合并 6 次 launch（1.95 ms 纯启动开销）、allReduce+allGather 合一 | 9.51 → 6.0 ms | HCCL ≤6 ms |
+| P5 | dense bf16 + L1 融合 | 1.31 → 0.8 ms | 最后做，收益小 |
+
+目标终态：**26.5 ms / 617,332 sps（A100 的 67%）**；若每样本项同时压到 1.0 µs，可到 25.3 ms / 648,000 sps（70%）。
+
+## 3. 线性扩展（未验证）
+
+| 项 | 现状 | 方案 | 判据 |
+|---|---|---|---|
+| 单机 | 8 die 已验证 | — | — |
+| 多机 | 未验证 | `torchrun --nnodes=N --node_rank=i --master_addr=...`；HCCL over RoCE/UB 需先确认网卡与 `ub_verbs` 配置 | 8→16 die 扩展比 ≥1.6；16→32 ≥1.7 |
+| 风险 | — | ① planner 用 gloo 广播，跨机需 gloo 可达；② `global_hbm_for_values=0` 时按全局规模推算，跨机要复核 HBM 预算；③ 分片计划随 world_size 变化，容量整除约束需重算 | — |
+
+## 4. 高性能 HKV（已量化）
+
+机制：`DynamicEmbeddingBagCollectionSharder` 只物化被访问的 key，`local_hbm_for_values` 给每表本地 HBM 配额，`global_hbm_for_values=0` 由 planner 推算；容量取 `max+1` 向上对齐 2 的幂。
+
+已排除的两个猜测（实测）：
+
+| 猜测 | 实验 | 结果 |
+|---|---|---|
+| 数据搬运是瓶颈 | `--frozen-data`（一个 batch 常驻 NPU） | 16384 省 0.75 ms、2048 省 1.56 ms → 数据侧 ≤1.6 ms |
+| HBM 配额不足导致 spill | `--hbm-gb 4 → 16` | 16384 省 0.87 ms、2048 无变化 → 不是热集问题 |
+
+当前瓶颈：`lookup_backward_v2_kernel` 24 次/步 × 615 µs。优化方向与判据见 §2.4 P1。
+
+## 5. 数据格式
+
+`dac_sample_day_{i}_processed.npz`，每天一个文件：
 
 | 键 | dtype | 形状 | 说明 |
 |---|---|---|---|
-| `X_int` | int32 | (N, 13) | 数值特征，**已做过 `log(max(x,0)+3)`**，本实现不再变换 |
-| `X_cat` | float64 | (N, 26) | 类别特征（已取模到词表基数；float64 是该 loader 的读入约定） |
+| `X_int` | int32 | (N, 13) | 数值特征，**已做 `log(max(x,0)+3)`** |
+| `X_cat` | float64 | (N, 26) | 类别特征（已按词表取模） |
 | `y` | int32 | (N,) | 标签 |
 
-路径由环境变量给出：
-
 ```bash
-export DLRM_DATA_DIR=/path/to/npz_dir     # 默认 ./data/criteo_pt
+export DLRM_DATA_DIR=/path/to/npz_dir      # 默认 ./data/criteo_pt
 ```
 
-真实 Criteo 1TB 切片的构造方式见 `results/dlrm_950_criteo1tb_vs_gpu.txt` §1（parquet → `day_i_{dense,sparse,labels}.npy` → npz）。
+1 TB 切片的构造（parquet → npy → npz）见 `results/dlrm_950_criteo1tb_vs_gpu.txt` §1。
 
-## 运行（单机 8 die）
+## 6. 运行
 
 ```bash
 torchrun --nproc_per_node=8 dlrm_v2_train.py \
@@ -46,41 +121,23 @@ torchrun --nproc_per_node=8 dlrm_v2_train.py \
   --data-dir $DLRM_DATA_DIR --train-days 0,1,2,3,4,5 --test-days 6
 ```
 
-常用参数：
-
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--batch-size` | 1024 | **全局** batch（每 die = global/8） |
-| `--hbm-gb` | 4.0 | 每张表在 HBM 的配额（26 表均分） |
-| `--dist-type` | 库默认(continuous) | key→rank 映射，可选 `roundrobin` |
-| `--frozen-data` | 关 | 冻结一个 batch 常驻 NPU，用于隔离数据侧开销 |
+| `--hbm-gb` | 4.0 | 每张表 HBM 配额（26 表均分） |
+| `--dist-type` | continuous | key→rank 映射，可选 `roundrobin` |
+| `--frozen-data` | 关 | 冻结一个 batch 常驻 NPU，隔离数据侧 |
 | `--csv` | 空 | 逐步耗时落盘 |
 
-## 实现要点
+`tools/`：`p2_no_step_sync.py` 生成带 `--sync-every` 的版本；`parse_msprof.py` 解析 msprof 单步预算。
 
-1. **稀疏侧用 HKV 动态表**：`dynamic_emb.DynamicEmbeddingBagCollectionSharder` + `DynamicEmbeddingShardingPlanner`，`local_hbm_for_values` 给本地配额，`global_hbm_for_values=0` 由 planner 推算；只物化被访问的 key。
-2. **容量约束**：表容量取 `max+1` 向上对齐到 2 的幂，并要求 `num_embeddings % batch_size == 0`。
-3. **优化器**：稀疏 fused `EXACT_ROWWISE_ADAGRAD`，稠密 `SGD`（无开关）。
-4. **交互类型固定 dot**：按 TF zoo 对齐——`matmul(x, xᵀ)` 取上三角不含对角；`fan_avg` normal 初始化；L1=1e-2 只加首层。
-5. **分布式**：HCCL 建组，planner 内部 `broadcast_object_list` 走 gloo 子组（HCCL 不支持 object collective）。
-
-## 实测性能（8 die，Criteo 1TB 切片，MLPerf 词表）
-
-| global batch | 步时(median) | 吞吐 | 对 8×A100 基线 |
-|---:|---:|---:|---:|
-| 2,048 | 24.26 ms | 82,988 sps | 40.5% |
-| 16,384 | 42.90 ms | 378,798 sps | 40.9% |
-
-单步预算（`--batch-size 16384`，msprof）：idle 12.80 ms(29.8%) + HKV 反向 lookup 15.05 ms(35.1%) + HCCL 9.51 ms(22.2%) + 其余 5.54 ms。
-详见 `results/dlrm_950_criteo1tb_vs_gpu.txt` 与 `results/dlrm950_prof_stage0.txt`。
-
-## 已知限制
+## 7. 已知限制
 
 - 交互类型只有 dot，无 DCN 分支；
-- 稠密优化器写死 SGD，与 A100 基线里 2048 档的 Adagrad 不同口径；
-- 数据 loader 会把整个 npz 读进内存，10^8 行级别需要分天切片；
-- 表容量与 batch_size 的整除约束在改 batch 时会触发容量对齐。
+- 稠密优化器写死 SGD（A100 的 2048 档用 Adagrad，口径不同）；
+- loader 把整天 npz 读进内存，10^8 行级别需分天切片；
+- 多机未验证。
 
-## 脱敏说明
+## 8. 脱敏说明
 
-入库版本已把集群内的数据路径改为 `DLRM_DATA_DIR` 环境变量 / `./data` 占位，代码中不含内网地址、主机名或账号信息。
+入库版本数据路径走 `DLRM_DATA_DIR` 或 `./data` 占位，代码与文档不含内网地址、主机名、账号信息。
