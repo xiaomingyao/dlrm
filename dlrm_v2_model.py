@@ -1,0 +1,139 @@
+# coding=utf-8
+"""DLRM 模型 —— RecSDK v2 (torch_rec_v2 / dynamic_emb) 实现。
+
+结构与官方 recsdk-7.1.RC1/examples/dlrm/model/model.py 严格对齐：
+  bottom_stack : dense(13) -> 512 -> 256 -> emb_dim  (relu, L1 正则 1e-2)
+  dot 交互     : matmul(x, x^T) 取上三角(不含对角)展平
+  top_stack    : (emb_dim + n_vec*(n_vec-1)) -> 1024 -> 1024 -> 512 -> 256 -> 1
+
+稀疏侧用 TorchRec EmbeddingBagCollection，由 dynamic_emb 提供 NPU 上的
+DynamicEmbeddingBagCollectionSharder（HKV 动态稀疏表），
+不复用 nn.EmbeddingBag —— 后者反向 _embedding_bag_backward 在 torch_npu 上无实现。
+"""
+
+import os
+
+import torch
+import torch.nn as nn
+import torchrec
+
+
+# ----------------------------------------------------------------------------
+# 稠密侧
+# ----------------------------------------------------------------------------
+class DenseMLP(nn.Module):
+    """bottom_stack / top_stack 共用的 MLP 构造器。
+
+    初始化对齐 zoo 的 tf.variance_scaling_initializer(mode="fan_avg", distribution="normal")：
+      tf fan_avg normal -> std = sqrt(scale / ((fan_in + fan_out) / 2))，scale=1.0
+    PyTorch 默认的 kaiming_uniform_(a=sqrt(5)) 实际 std ≈ 1/sqrt(fan_in)，
+    比 fan_avg 小约 sqrt(2) 倍，会把 logits 压在 0 附近、梯度极弱。
+    """
+
+    def __init__(self, dims, last_activation=True, l1_lambda=1e-2):
+        super().__init__()
+        layers = []
+        lin_idx = []
+        for i in range(len(dims) - 1):
+            lin = nn.Linear(dims[i], dims[i + 1])
+            # 对齐 tf.variance_scaling_initializer(mode="fan_avg", distribution="normal")
+            fan_avg = (dims[i] + dims[i + 1]) / 2.0
+            std = (1.0 / fan_avg) ** 0.5
+            with torch.no_grad():
+                lin.weight.normal_(0.0, std)
+                lin.bias.zero_()
+            layers.append(lin)
+            lin_idx.append(len(layers) - 1)
+            is_last = i == len(dims) - 2
+            if not is_last or last_activation:
+                layers.append(nn.ReLU())
+        self.net = nn.Sequential(*layers)
+        self._lin_idx = lin_idx
+        # L1 正则沿 zoo 的 kernel_regularizer=l1_regularizer(1e-2)
+        self.l1_lambda = l1_lambda
+
+    def forward(self, x):
+        return self.net(x)
+
+    def l1_penalty(self):
+        """只对第一个 Linear 的权重施加 L1，与 zoo 的 kernel_regularizer 语义一致。"""
+        w = self.net[self._lin_idx[0]].weight
+        return self.l1_lambda * w.abs().sum()
+
+
+def dot_interaction(x):
+    """DLRM 特征交互：x (B, F, D) -> (B, F*(F-1))  上三角不含对角。
+
+    对齐 zoo 的 _dot_interaction：
+      xactions = matmul(x, x^T)              # (B,F,F)
+      上三角(含对角)被置零，留下严格下三角
+      reshape -> (B, F*F)
+    官方 dlrm_s_pytorch 的 interact_features 也是这个语义（UpperTriangular 后展平）。
+    """
+    b, f, _ = x.shape
+    xactions = torch.bmm(x, x.transpose(1, 2))  # (B,F,F)
+    ones = torch.ones_like(xactions)
+    upper_tri_mask = torch.triu(ones, diagonal=0)  # 含对角的上三角
+    activations = torch.where(upper_tri_mask.bool(), torch.zeros_like(xactions), xactions)
+    return activations.reshape(b, f * f)
+
+
+# ----------------------------------------------------------------------------
+# 稀疏侧 + 整体模型
+# ----------------------------------------------------------------------------
+class DLRMv2(nn.Module):
+    """DLRM：dense MLP + TorchRec EBC + dot 交互 + top MLP。
+
+    稀疏侧用 EmbeddingBagCollection，供 DistributedModelParallel 切分成
+    HKV 动态稀疏表（RecSDK v2 的 dynamic_emb sharder）。
+    """
+
+    def __init__(self, num_dense, sparse_configs, emb_dim, bot_dims, top_dims):
+        super().__init__()
+        self.num_dense = num_dense
+        self.num_sparse = len(sparse_configs)
+        self.emb_dim = emb_dim
+        # n_vec = num_sparse + 1（dense embedding 向量也算一个"特征"）
+        self.n_vec = self.num_sparse + 1
+        self.inter_dim = self.n_vec * self.n_vec
+
+        # bottom: dense -> emb_dim
+        self.bot_l = DenseMLP([num_dense] + list(bot_dims) + [emb_dim], last_activation=True)
+        # top: [emb_dim, inter_dim] -> 1（最后一层不带激活）
+        self.top_l = DenseMLP([emb_dim + self.inter_dim] + list(top_dims) + [1],
+                              last_activation=False)
+
+        # meta device 上建表，交给 planner 决定落到哪
+        self.ebc = torchrec.EmbeddingBagCollection(
+            device=torch.device("meta"),
+            tables=sparse_configs,
+        )
+
+    def forward(self, dense_x, sparse_features):
+        """
+        dense_x        : (B, num_dense) float
+        sparse_features: KeyedJaggedTensor
+        """
+        ebc_out = self.ebc(sparse_features)
+        flat = ebc_out.values()                                 # (B, num_sparse*emb_dim)
+        emb_out = flat.view(-1, self.num_sparse, self.emb_dim)
+
+        dense_emb = self.bot_l(dense_x)                         # (B, D)
+        feats = torch.cat([dense_emb.unsqueeze(1), emb_out], dim=1)  # (B, F, D)
+        inter = dot_interaction(feats)                          # (B, F*F)
+        top_in = torch.cat([dense_emb, inter], dim=1)           # (B, D + F*F)
+        logits = self.top_l(top_in).squeeze(1)                  # (B,)
+        return logits
+
+
+def build_sparse_configs(num_sparse, num_embeddings_per_table, emb_dim, prefix="t"):
+    """构造每个稀疏特征一张表的 EmbeddingBagConfig 列表。"""
+    return [
+        torchrec.EmbeddingBagConfig(
+            name="%s_%d" % (prefix, i),
+            embedding_dim=emb_dim,
+            num_embeddings=num_embeddings_per_table[i],
+            feature_names=["cate_%d" % i],
+        )
+        for i in range(num_sparse)
+    ]
