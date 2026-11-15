@@ -1,7 +1,9 @@
 # 阶段 2 诊断：统一表 + EC + dedup（A2 档）
 
 采集：`torch_npu.profiler`（rank0，wait=1/warmup=2/active=20），导出 `kernel_details.csv`；
-窗口 **21.51 ms/步**（含 profiler 扰动；生产实测 16.86 ms + 取数 1.16 ms）。
+窗口 **21.51 ms/步**（含 profiler 扰动）。扰动幅度实测 **1.19–1.27×**：同一命令自报
+step 18.98 ms + 取数 2.07 ms = 21.05 ms，而生产为 15.12 + 1.46 = 16.58 ms ⇒ 本文件只看**结构与占比**，
+绝对步时一律引用无 profiler 的 runner。
 解析工具：`tools/parse_kernel_details.py`。
 
 > 为什么不用 msprof：同一配置下 `msprof --model-execution=on` 会让 rank2 `SIGSEGV`（exitcode -11），
