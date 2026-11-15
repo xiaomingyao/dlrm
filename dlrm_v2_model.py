@@ -89,8 +89,9 @@ class DLRMv2(nn.Module):
     """
 
     def __init__(self, num_dense, sparse_configs, emb_dim, bot_dims, top_dims,
-                 num_sparse=None):
+                 num_sparse=None, ec_mode=False):
         super().__init__()
+        self.ec_mode = bool(ec_mode)
         self.num_dense = num_dense
         # 统一表模式下一张表承载全部特征，特征数必须外部给定（见 build_unified_sparse_config）
         self.num_sparse = len(sparse_configs) if num_sparse is None else int(num_sparse)
@@ -106,18 +107,41 @@ class DLRMv2(nn.Module):
                               last_activation=False)
 
         # meta device 上建表，交给 planner 决定落到哪
-        self.ebc = torchrec.EmbeddingBagCollection(
-            device=torch.device("meta"),
-            tables=sparse_configs,
-        )
+        if self.ec_mode:
+            # EC：不做 pooling，每个值返回自己的向量 ⇒ 单特征(每样本 26 值) 时输出仍是 (B,26,D)
+            self.ec = torchrec.EmbeddingCollection(
+                device=torch.device("meta"),
+                tables=sparse_configs,
+            )
+        else:
+            self.ebc = torchrec.EmbeddingBagCollection(
+                device=torch.device("meta"),
+                tables=sparse_configs,
+            )
 
     def forward(self, dense_x, sparse_features):
         """
         dense_x        : (B, num_dense) float
         sparse_features: KeyedJaggedTensor
         """
-        ebc_out = self.ebc(sparse_features)
-        flat = ebc_out.values()                                 # (B, num_sparse*emb_dim)
+        if self.ec_mode:
+            ec_out = self.ec(sparse_features)
+            # EC 返回 KeyedTensor：.values() 是 {feature: tensor}（单特征时只有一个）
+            _v = ec_out.values()
+            if isinstance(_v, dict):                  # KeyedTensor: {feature: JaggedTensor}
+                _v = next(iter(_v.values()))
+            elif not hasattr(_v, "view") and hasattr(_v, "__iter__") and not isinstance(_v, tuple):
+                try:
+                    _v = next(iter(_v))               # dict_values
+                except StopIteration:
+                    pass
+            if hasattr(_v, "values") and not isinstance(_v, torch.Tensor):
+                _v = _v.values()                      # JaggedTensor → 扁平 (B*num_sparse, D)
+            flat = _v
+            # flat: (B*num_sparse, emb_dim)，行主序
+        else:
+            ebc_out = self.ebc(sparse_features)
+            flat = ebc_out.values()                             # (B, num_sparse*emb_dim)
         emb_out = flat.view(-1, self.num_sparse, self.emb_dim)
 
         dense_emb = self.bot_l(dense_x)                         # (B, D)
@@ -155,5 +179,22 @@ def build_unified_sparse_config(num_sparse, total_rows, emb_dim, name="t_unified
             embedding_dim=emb_dim,
             num_embeddings=int(total_rows),
             feature_names=["cate_%d" % i for i in range(num_sparse)],
+        )
+    ]
+
+
+def build_unified_ec_config(num_sparse, total_rows, emb_dim, name="t_unified", feature="cate_all"):
+    """统一表 + EC 模式：num_sparse 个特征打包成 1 个特征（每样本 num_sparse 个值）。
+
+    动机（stage1 实测 A2 档每步）：UBDMA 264 次/步、NOTIFY_WAIT 343 次/步 —— all2all 被
+    26 个特征切碎。打包成 1 个特征后分块数应降到个位数；EC 路径还支持 use_index_dedup，
+    按唯一 id 收发，进一步压缩通信与查表行数。
+    """
+    return [
+        torchrec.EmbeddingConfig(
+            name=name,
+            embedding_dim=emb_dim,
+            num_embeddings=int(total_rows),
+            feature_names=[feature],
         )
     ]

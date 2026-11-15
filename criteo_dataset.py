@@ -163,13 +163,15 @@ class CriteoDataset:
                 xi = xi.to(device)
                 yy = yy.to(device)
 
-            # KeyedJaggedTensor：26 个特征 × 每样本 1 个值，按特征拼接
-            vals = [xc[:, f].contiguous() for f in range(NUM_FIELDS)]
-            values = torch.cat(vals, 0)
-            # 统一表模式：feature-major 布局（NUM_FIELDS × local_bs）+ per-feature 偏移
+            # per-feature id 偏移（统一表模式）先加，再决定布局
             if getattr(self, "offsets", None) is not None:
-                off = self.offsets.to(values.device)
-                values = (values.view(NUM_FIELDS, local_bs) + off.unsqueeze(1)).reshape(-1)
+                xc = xc + self.offsets.to(xc.device).unsqueeze(0)      # (B,26) 广播
+            if getattr(self, "single_feature", False):
+                # EC 模式：1 个特征、每样本 NUM_FIELDS 个值 —— 必须行主序
+                values = xc.reshape(-1).contiguous()
+            else:
+                # EBC 模式：NUM_FIELDS 个特征 × 每样本 1 个值 —— 特征主序
+                values = torch.cat([xc[:, f].contiguous() for f in range(NUM_FIELDS)], 0)
             if device != "cpu":
                 values = values.to(device)
             # ⚠ lengths 必须是 int64（torch.long）**且** 与 values 同 device。
@@ -180,9 +182,14 @@ class CriteoDataset:
             #   曾在 lengths 放到 NPU(int32) 时遇到 507035，误判为"必须留 CPU"，
             #   实际根因是 dtype 而非 device。留在 CPU 会因为 device 不一致而报
             #   另一个错，所以这里统一成 long + 同 device。
-            lengths = torch.ones(local_bs * NUM_FIELDS, dtype=torch.long,
-                                 device=values.device)
-            keys = ["cate_%d" % f for f in range(NUM_FIELDS)]
+            if getattr(self, "single_feature", False):
+                lengths = torch.full((local_bs,), NUM_FIELDS, dtype=torch.long,
+                                     device=values.device)
+                keys = ["cate_all"]
+            else:
+                lengths = torch.ones(local_bs * NUM_FIELDS, dtype=torch.long,
+                                     device=values.device)
+                keys = ["cate_%d" % f for f in range(NUM_FIELDS)]
             kt = torchrec.KeyedJaggedTensor(keys=keys, values=values, lengths=lengths)
 
             yield bi, xi, kt, yy

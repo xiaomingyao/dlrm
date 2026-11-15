@@ -76,6 +76,28 @@ PY
   rm -f "$LOGS/.op_raw.csv"
 done
 
+echo "== 2.5 进展快照 results/STATUS.md =="
+python3 - "$LOGS" "$ROOT/results/STATUS.md" <<'PY'
+import sys, os, glob, time, re
+logs, out = sys.argv[1], sys.argv[2]
+rows = []
+for f in sorted(glob.glob(os.path.join(logs, "*.summary.txt"))):
+    txt = open(f, encoding="utf-8", errors="ignore").read()
+    med = re.search(r"median=([0-9.]+)", txt)
+    thr = re.search(r"throughput\s*=\s*([0-9.]+)", txt)
+    auc = re.search(r"test_auc\s*=\s*([0-9.]+)", txt)
+    tag = os.path.basename(f).replace(".summary.txt", "")
+    rows.append((tag, med.group(1) if med else "-", thr.group(1) if thr else "-", auc.group(1) if auc else "-"))
+lines = [f"# 进展快照", "", f"生成时间（UTC+8）：{time.strftime('%Y-%m-%d %H:%M:%S')}", "",
+         f"共 {len(rows)} 份运行摘要，最近 25 条：", "",
+         "| 运行 | median(ms) | 吞吐(sps) | AUC |", "|---|---:|---:|---:|"]
+for r in rows[-25:]:
+    lines.append(f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} |")
+lines += ["", "> 自动生成，勿手改；优化项账本见 `OPTIMIZATIONS.md`，诊断见 `profiling/`。"]
+open(out, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+print(f"STATUS.md: {len(rows)} 条记录")
+PY
+
 echo "== 3. 脱敏闸门 =="
 python3 "$ROOT/tools/scrub_check.py" "$ROOT" || { echo "命中敏感信息，已中止发布"; exit 1; }
 

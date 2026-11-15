@@ -29,6 +29,7 @@ from dynamic_emb.distributed.dynamicemb_config import (
     DynamicEmbTableOptions,
 )
 from dynamic_emb.distributed.embeddingbag import DynamicEmbeddingBagCollectionSharder
+from dynamic_emb.distributed.embedding import DynamicEmbeddingCollectionSharder
 from dynamic_emb.distributed.planner.enumerators import DynamicEmbeddingEnumerator
 from dynamic_emb.distributed.planner.planners import DynamicEmbeddingShardingPlanner
 from dynamic_emb.distributed.planner.types import DynamicEmbParameterConstraints
@@ -38,7 +39,8 @@ from torchrec.distributed.planner import Topology
 from torchrec.distributed.types import ShardingType
 
 from criteo_dataset import CriteoDataset, _next_pow2
-from dlrm_v2_model import DLRMv2, build_sparse_configs, build_unified_sparse_config
+from dlrm_v2_model import (DLRMv2, build_sparse_configs, build_unified_sparse_config,
+                           build_unified_ec_config)
 
 
 def make_kt(batch_size, num_sparse, vocab_sizes, device, seed=None):
@@ -170,6 +172,10 @@ def main():
     p.add_argument("--probe-graph", action="store_true",
                    help="可行性探针：尝试用 NPUGraph 捕获一步训练并 replay 3 次")
     p.add_argument("--probe-graph-at", type=int, default=3, help="第几步开始捕获（默认 3）")
+    p.add_argument("--ec-mode", action="store_true",
+                   help="EC 模式：26 特征打包成 1 个特征（每样本 26 值），配合 --unified-emb 使用")
+    p.add_argument("--index-dedup", action="store_true",
+                   help="EC 模式下按唯一 id 收发（use_index_dedup）")
     p.add_argument("--unified-align", choices=["pow2", "batch"], default="pow2",
                    help="统一表行数对齐方式：pow2=向上取 2 的幂（旧行为）；batch=对齐到每卡本地 batch")
     p.add_argument("--data-dir", type=str,
@@ -264,6 +270,9 @@ def main():
     else:
         vocab_sizes = [args.vocab_size] * args.num_sparse
 
+    if args.ec_mode and not args.unified_emb:
+        raise SystemExit("--ec-mode 必须与 --unified-emb 同用（单特征 + 统一表）")
+    ds.single_feature = bool(args.ec_mode)
     if args.unified_emb:
         total_rows = ds.enable_unified_ids(vocab_sizes)
         if args.unified_align == "pow2":
@@ -271,8 +280,11 @@ def main():
         else:
             a = local_bs_pre
             rows_aligned = ((total_rows + a - 1) // a) * a
-        eb_configs = build_unified_sparse_config(
-            args.num_sparse, rows_aligned, args.emb_dim)
+        if args.ec_mode:
+            eb_configs = build_unified_ec_config(args.num_sparse, rows_aligned, args.emb_dim)
+        else:
+            eb_configs = build_unified_sparse_config(
+                args.num_sparse, rows_aligned, args.emb_dim)
         log("[unified] 26 表合 1：raw=%d 对齐后=%d（%s，+%.1f%%）"
             % (total_rows, rows_aligned, args.unified_align,
                100.0 * (rows_aligned / total_rows - 1)))
@@ -300,12 +312,18 @@ def main():
     if args.dist_type:
         fused_params["dist_type"] = args.dist_type
         log("[dist_type] =", args.dist_type)
-    sharder = DynamicEmbeddingBagCollectionSharder(fused_params=fused_params)
+    if args.ec_mode:
+        sharder = DynamicEmbeddingCollectionSharder(
+            fused_params=fused_params, use_index_dedup=bool(args.index_dedup))
+        log("[ec-mode] 单特征打包 + use_index_dedup=%s" % bool(args.index_dedup))
+    else:
+        sharder = DynamicEmbeddingBagCollectionSharder(fused_params=fused_params)
 
     model_ebc = DLRMv2(
         num_dense=args.num_dense,
         sparse_configs=eb_configs,
         num_sparse=args.num_sparse,
+        ec_mode=args.ec_mode,
         emb_dim=args.emb_dim,
         bot_dims=parse_dims(args.bot_dims),
         top_dims=parse_dims(args.top_dims),
@@ -313,13 +331,15 @@ def main():
 
     # ⚠ collective_plan 内部走 broadcast_object_list（CPU 张量）⇒ 必须用 gloo 子组，
         #   用 dist.GroupMember.WORLD(HCCL) 会崩 code 19。
-    plan = planner.collective_plan(model_ebc.ebc, [sharder], _cpu_pg)
+    _eb_module = model_ebc.ec if args.ec_mode else model_ebc.ebc
+    plan = planner.collective_plan(_eb_module, [sharder], _cpu_pg)
 
     # collective_plan 对传入的 EBC 生成的 key 是 ""（视作顶层）；
     # 但 DMP 会从 DLRMv2 顶层遍历，子模块 ebc 的路径是 "ebc"。
     # 两者必须对齐，否则 DMP 会在顶层用 DLRMv2 类型去查 _sharder_map → KeyError。
+    _eb_key = "ec" if args.ec_mode else "ebc"
     if "" in plan.plan:
-        plan.plan["ebc"] = plan.plan.pop("")
+        plan.plan[_eb_key] = plan.plan.pop("")
 
     if is_main and args.print_sharding:
         for ckey, plans in plan.plan.items():
