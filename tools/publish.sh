@@ -23,24 +23,25 @@ pull() {  # $1=远端文件 $2=本地文件
   ssh "$NODE_SSH" "docker exec $CTR cat '$1'" > "$2" 2>/dev/null || { echo "skip $1"; rm -f "$2"; }
 }
 
-echo "== 1. 训练日志：摘要行 + 全量 gzip =="
-for f in $(ssh "$NODE_SSH" "docker exec $CTR bash -lc 'ls -S $RTMP/{an,un,p1a,sw,smoke,uni}_*.log 2>/dev/null | head -20'" | tr -d '\r'); do
-  base=$(basename "$f" .log)
-  tmp="$LOGS/.$base.tmp"
+echo "== 1. 训练日志：摘要行（+ 有效优化项保留压缩全量）=="
+collect_one() {   # $1 = 远端路径
+  local f=$1 base tmp
+  base=$(basename "$f" .log); tmp="$LOGS/.$base.tmp"
   pull "$f" "$tmp"
-  [ -s "$tmp" ] || continue
-  # 单文件上限 8 MB，超限只留摘要
-  if [ "$(stat -c%s "$tmp")" -gt 8388608 ]; then
-    grep -aE 'step_time_ms|throughput|RESULT:|test_auc|test_acc|\[unified\]' "$tmp" > "$LOGS/$base.summary.txt"
-    rm -f "$tmp"; continue
-  fi
+  [ -s "$tmp" ] || return 0
   grep -aE 'step_time_ms|throughput|RESULT:|test_auc|test_acc|\[unified\]|world_size' "$tmp" \
     | sanitize | head -20 > "$LOGS/$base.summary.txt"
-  if echo "$base" | grep -qE "$KEEP_FULL_RE"; then
-    sanitize < "$tmp" | gzip -c > "$LOGS/$base.log.gz"   # 仅有效优化项保留全量（压缩+脱敏）
+  if echo "$base" | grep -qE "$KEEP_FULL_RE" && [ "$(stat -c%s "$tmp")" -le 8388608 ]; then
+    sanitize < "$tmp" | gzip -c > "$LOGS/$base.log.gz"
   fi
   rm -f "$tmp"
+}
+for pat in an_ un_ p1a_ sw_ smoke_ uni_; do
+  for f in $(ssh "$NODE_SSH" "docker exec $CTR bash -lc 'ls -S $RTMP/${pat}*.log 2>/dev/null | head -6'" | tr -d '\r'); do
+    [ -n "$f" ] && collect_one "$f"
+  done
 done
+echo "  摘要 $(ls "$LOGS"/*.summary.txt 2>/dev/null | wc -l) 份，全量 $(ls "$LOGS"/*.log.gz 2>/dev/null | wc -l) 份"
 
 echo "== 2. profile：算子 top 表（若存在 op_statistic）=="
 ssh "$NODE_SSH" "docker exec $CTR bash -lc 'ls $RTMP/prof_*/PROF_*/mindstudio_profiler_output/op_statistic_*.csv 2>/dev/null | head -1'" \

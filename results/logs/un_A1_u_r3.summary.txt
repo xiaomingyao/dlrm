@@ -1,0 +1,7 @@
+[unified] 26 表合 1：rows=268435456 (raw 204187904, 对齐后 268435456)
+world_size   = 8
+step_time_ms  = mean=7.089 median=6.768 min=6.141 max=11.947 std=0.855
+throughput    = 288891.8 samples/s (global)
+RESULT: PASS (loss rel_change=-11.60%)
+test_acc      = 0.9676  (全负基线 0.9679)
+test_auc      = 0.7101  (随机=0.5)
