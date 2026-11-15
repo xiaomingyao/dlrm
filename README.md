@@ -48,13 +48,18 @@ A100 数据取自 facebook `torchrec_dlrm` README 的 Preliminary Training Resul
 
 ### 2.1 现状对 A100
 
-| local BS（global） | 本实现 | A100 ×8 | 达成率 |
-|---|---:|---:|---:|
-| 256（2,048） | 24.26 ms / 82,988 sps | 10.00 ms / 204,800 sps | 41% |
-| 2,048（16,384） | 42.90 ms / 378,798 sps | 17.70 ms / 925,696 sps | 41% |
+口径：8 die、Criteo 1TB 切片（112.3 M 行）、每档 n=3 取 median、warmup 20 步、无 profiler；A100 为官方 8×A100 40GB 同表数据。
 
-线性拟合（1024/2048/16384 三点）：本实现 **22.0 ms 固定 + 1.273 µs/样本**；A100 **8.90 ms + 0.537 µs/样本**。
-16384 档差距 25.2 ms = 固定项 13.1 ms（52%）+ 每样本项 12.1 ms（48%）。
+| 档 | global batch | 每卡本地 | 最佳配置 | median | 吞吐 | 对 A100 | 2× 目标 | 差距 |
+|---|---:|---:|---|---:|---:|---:|---:|---:|
+| A1 | 2,048 | 256 | 统一表 + **EBC** | **6.78 ms** | 302,020 sps | **147.5%** | 5.00 ms | 26% |
+| A2 | 16,384 | 2,048 | 统一表 + **EC + dedup** | **16.31 ms** | 1,004,600 sps | **108.5%** | 8.85 ms | 45% |
+
+为什么按档选配置：EC + `use_index_dedup` 在大 batch 下把唯一 id 从 42.6 万压到约 12.6 万（A2 −19.8%）；小 batch 下排序开销大于通信节省（A1 9.89 ms vs EBC 6.78 ms）。EC 不带 dedup 时 A2 反而 62.4 ms，说明**收益来自 dedup，不是 EC 本身**。
+
+进展：优化前 A1 21.19 ms（47.2%）、A2 40.27 ms（44.0%）；统一表 A1 −68.0%、A2 −49.5%；EC+dedup 再让 A2 −19.8%。原始数据见 `results/dlrm950_ec_dedup_anchor.txt`、`results/dlrm950_unified_emb_anchor.txt`。
+
+硬件利用率（A2 实测，宿主采样）：AICore 2.9%、AIVector 0.6%、带宽 0%，折算约 17.7 TFLOP/s、19 GB/s ⇒ **瓶颈不是算力，而是每步有效工作量太小**（见 `profiling/stage1_utilization.md`）。
 
 ### 2.2 单步预算（msprof，16384 档）
 

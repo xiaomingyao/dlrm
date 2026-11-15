@@ -1,0 +1,37 @@
+DLRM on Ascend 950DT — 统一表 + EC + index dedup 锚定（8 die, Criteo 1TB 切片, 300 步/次, warmup 20）
+
+采集：2026-11-15，无 profiler，torchrun --nproc_per_node=8
+口径：每卡本地 batch = global/8；步时取 median；A100 基线 = 官方 8×A100 40GB
+
+一、A2 档（global 16,384 = 每卡 2,048，dot + Adagrad）
+  配置：--unified-emb --ec-mode --index-dedup
+  r1 median 16.309 ms   AUC 0.7404
+  r2 median 16.284 ms   AUC 0.7410
+  r3 median 18.836 ms   AUC 0.7408
+  -> 取中位 16.309 ms / 1,004,599 sps
+  A100 = 925,696 sps (17.70 ms)  =>  达成 108.5%
+  对比上一版（统一表 EBC）：20.342 ms / 805,428 sps  =>  19.8% 更快
+
+二、A1 档（global 2,048 = 每卡 256，dot + SGD）
+  配置：同上
+  r1 median 10.134 ms   AUC 0.7116
+  r2 median 9.620 ms   AUC 0.7105
+  r3 median 9.890 ms   AUC 0.7113
+  -> 取中位 9.890 ms / 207,078 sps
+  A100 = 204,800 sps (10.00 ms)  =>  达成 101.1%
+  对比统一表 EBC：6.781 ms  =>  EC 档反而慢 46%
+
+三、A2 档消融（单次，60 步，用于定位收益来源）
+  EC 不带 dedup           62.409 ms   （JaggedTensor 逐值收发，最差）
+  EC + dedup              16.31 ms
+  EBC（不做 EC 打包）      20.34 ms
+  => 收益来自 index dedup（唯一 id 从 42.6 万降到约 12.6 万），不是 EC 本身
+
+四、精度（300 步链路值，非收敛精度）
+  A2 基线 0.7430 → 0.7404/0.7410/0.7408
+  A1 基线 0.7162 → 0.7116/0.7105/0.7113
+
+五、结论
+  1. 按档选配置：A2 用 EC+dedup（16.31 ms，108.5% A100）；A1 用 EBC（6.78 ms，147.5% A100）。
+  2. A2 已越过 A100 单倍线；距 2x 目标 8.85 ms 还差 84%。
+  3. EC+dedup 在小 batch 失效：排序/去重开销 > 通信节省（A1 9.89 vs 6.78）。
