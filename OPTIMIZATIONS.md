@@ -47,3 +47,7 @@
 | O12 | 取数固化（加载期 log1p + dtype） | 每步不再做 log1p/astype | 已测·有效 | 131k 档 prep 12.46 → 5.2~6.2 ms | −50%+ 取数 | 端到端才有意义，纯计算口径看不出 | `results/dlrm950_batch_scaling_anchor.txt` |
 | O13 | `TASK_QUEUE_ENABLE=2` | 异步任务队列 | 已测·小 batch 有效 | A2 +2.7%（三轮同向，均值 +7%）；A4 −2.9% | 按档选，不设默认 | 节点多租户，噪声 ±8~12%，需交错多次取中位 | 同上 |
 | **O14** | **加大每卡本地 batch** | global 16,384 → 131,072 | 已测·有效（规模项） | 端到端 1,009,000 → 2,104,000 sps | A4 达 A100 176.8% | 固定开销摊薄；A4 对照档 A100 用 DCN v2，非同模型 | 同上 |
+| O15 | all2all 载荷 bf16（qcomm codec） | 通信字节减半 | **已测·无效** | 64k 档 29.52 → 34.23 ms（**+16%**） | — | encode/decode 额外 cast kernel 的开销大于字节节省；UB 上 alltoall 不是带宽受限。AUC 0.7268 vs 0.7367（80 步，噪声内） | `results/dlrm950_batch_scaling_anchor.txt` |
+| O16 | `HCCL_OP_EXPANSION_MODE=AIV` | collective 卸载到向量核 | **已测·无效** | A4 档 57.78 → 58.52 ms | — | 差异在漂移内（同窗口 base2 为 55.49） | 同上 |
+| O17 | `HCCL_BUFFSIZE=1024` | 加大通信缓冲 | **已测·显著变差** | A4 档 57.78 → 67.29 ms（+16%） | — | 大缓冲反而增加同步代价 | 同上 |
+| O18 | 减少 alltoall 实例数 | dedup 计数分桶对齐 | 观察 | A4 档 alltoall 合计 18.5 ms/步（窗口 73.7），100 个不同 kernel 名（形状特化） | 上限 ~4–6 ms | 每个 alltoall 形状不同→按形状重编译/重下发，需在 dynamic_emb 内做计数对齐，属侵入改动 | `profiling/stage2_ec_dedup_a2.md`（同类口径） |
