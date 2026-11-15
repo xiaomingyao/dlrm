@@ -125,6 +125,21 @@ export DLRM_DATA_DIR=/path/to/npz_dir      # 默认 ./data/criteo_pt
 
 1 TB 切片的构造（parquet → npy → npz）见 `results/dlrm_950_criteo1tb_vs_gpu.txt` §1。
 
+### 数据落盘位置（重要）
+
+数据集必须放在**宿主机挂载盘**，不要留在容器 overlay 里（`docker rm` 会连数据一起删）：
+
+```
+<宿主数据盘>/dlrm950/data/dlrm1tb/
+├── parquet/      # 原始 parquet（day=2015-02-15，250 文件，11.4 GiB）
+├── npy24/        # 24 shard（112.3 M 行，16.7 GiB）
+│   └── dac_sample_day_{0..6}_processed.npz   # 训练/测试实际读取（6.1 GiB）
+└── npy/ npy_probe/
+```
+
+容器以 `-v <宿主数据盘>:<容器内数据根>` 整块挂载后，`--data-dir` 直接指 `…/dlrm1tb/npy24`。
+迁移核对判据：两侧 `find -printf "%P %s"` 逐行 `diff` 为 0 行，且 npz 文件 md5 一致。
+
 ## 6. 运行
 
 ```bash

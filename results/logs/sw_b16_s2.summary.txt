@@ -1,0 +1,6 @@
+world_size   = 8
+step_time_ms  = mean=44.278 median=44.062 min=42.589 max=47.651 std=0.960
+throughput    = 370027.3 samples/s (global)
+RESULT: PASS (loss rel_change=-18.60%)
+test_acc      = 0.9674  (全负基线 0.9679)
+test_auc      = 0.7426  (随机=0.5)

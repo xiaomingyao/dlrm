@@ -167,6 +167,8 @@ def main():
     p.add_argument("--hbm-gb", type=float, default=4.0, help="每张表在 HBM 里预留的容量")
     p.add_argument("--unified-emb", action="store_true",
                    help="统一表：26 个特征共用一张表（id 加 per-feature 偏移），每步只 1 次查表")
+    p.add_argument("--unified-align", choices=["pow2", "batch"], default="pow2",
+                   help="统一表行数对齐方式：pow2=向上取 2 的幂（旧行为）；batch=对齐到每卡本地 batch")
     p.add_argument("--data-dir", type=str,
                    default=os.environ.get("DLRM_DATA_DIR", "./data/criteo_pt"))
     p.add_argument("--data", type=str, default="criteo", choices=["criteo", "synth"],
@@ -261,10 +263,16 @@ def main():
 
     if args.unified_emb:
         total_rows = ds.enable_unified_ids(vocab_sizes)
+        if args.unified_align == "pow2":
+            rows_aligned = _next_pow2(total_rows)
+        else:
+            a = local_bs_pre
+            rows_aligned = ((total_rows + a - 1) // a) * a
         eb_configs = build_unified_sparse_config(
-            args.num_sparse, _next_pow2(total_rows), args.emb_dim)
-        log("[unified] 26 表合 1：rows=%d (raw %d, 对齐后 %d)"
-            % (eb_configs[0].num_embeddings, total_rows, _next_pow2(total_rows)))
+            args.num_sparse, rows_aligned, args.emb_dim)
+        log("[unified] 26 表合 1：raw=%d 对齐后=%d（%s，+%.1f%%）"
+            % (total_rows, rows_aligned, args.unified_align,
+               100.0 * (rows_aligned / total_rows - 1)))
     else:
         eb_configs = build_sparse_configs(args.num_sparse, vocab_sizes, args.emb_dim)
 
