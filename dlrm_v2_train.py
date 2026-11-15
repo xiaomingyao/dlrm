@@ -167,6 +167,9 @@ def main():
     p.add_argument("--hbm-gb", type=float, default=4.0, help="每张表在 HBM 里预留的容量")
     p.add_argument("--unified-emb", action="store_true",
                    help="统一表：26 个特征共用一张表（id 加 per-feature 偏移），每步只 1 次查表")
+    p.add_argument("--probe-graph", action="store_true",
+                   help="可行性探针：尝试用 NPUGraph 捕获一步训练并 replay 3 次")
+    p.add_argument("--probe-graph-at", type=int, default=3, help="第几步开始捕获（默认 3）")
     p.add_argument("--unified-align", choices=["pow2", "batch"], default="pow2",
                    help="统一表行数对齐方式：pow2=向上取 2 的幂（旧行为）；batch=对齐到每卡本地 batch")
     p.add_argument("--data-dir", type=str,
@@ -431,6 +434,30 @@ def main():
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
+                if args.probe_graph and step_global == args.probe_graph_at:
+                    log("[probe-graph] 开始捕获（第 %d 步）" % step_global)
+                    try:
+                        _g = torch.npu.NPUGraph()
+                        torch.npu.synchronize()
+                        with torch.npu.graph(_g):
+                            _lo = model(xi, kt_)
+                            _l = criterion(_lo, label)
+                            optimizer.zero_grad()
+                            _l.backward()
+                            optimizer.step()
+                        torch.npu.synchronize()
+                        log("[probe-graph] CAPTURE_OK，开始 replay")
+                        _t0 = time.time()
+                        for _ in range(3):
+                            _g.replay()
+                        torch.npu.synchronize()
+                        log("[probe-graph] REPLAY %.3f ms/step" % ((time.time() - _t0) / 3 * 1000))
+                    except Exception as _e:   # noqa: BLE001 —— 探针就是要报出原始异常
+                        log("[probe-graph] CAPTURE_FAIL %s: %s"
+                            % (type(_e).__name__, str(_e)[:400]))
+                    stop = True
+                    break
 
                 torch.npu.synchronize()
                 dt = time.time() - t0

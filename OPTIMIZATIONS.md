@@ -29,7 +29,9 @@
 | O4 | `--hbm-gb` 4 → 16（每表 157 MB → 630 MB） | 只改配额 | 已测·否决 | A2 42.90 → 42.04；A1 24.26 → 24.17 | −0.87 ms / 0 | 不是热集/spill 问题，**排除 HBM 配额** | 同上 |
 | O5 | global batch 32,768 | 只改 batch | 已测·不可比 | A2 40.27 → 63.49（global 32,768） | 吞吐 514,282 sps（线性预测 63.7 ms） | **无 A100 对应档，不入对比**；只验证「固定项 + 每样本项」线性模型 | `/tmp/p1a.txt`（会话日志） |
 | **O6** | **统一表**（26 表合 1，per-feature id 偏移） | `--unified-emb`：`build_unified_sparse_config` + `enable_unified_ids` + 单表约束 | **已测·有效** | A1 21.192 → **6.781 ms**；A2 40.269 → **20.342 ms**（各 n=3） | **A1 −68.0%（4.56×）、A2 −49.5%（1.98×）**；达成率 47.2% → **147.5%**、44.0% → **87.0%** | 每步查表 24 次 → 1 次，固定项 18.46 → 4.84 ms、每样本项 1.331 → 0.946 µs；AUC 变化 −0.005 / −0.002（等价性成立） | `results/dlrm950_unified_emb_anchor.txt` |
-| **O7** | 图捕获 / 减少每步 kernel 数 | 训练步整图捕获或合并下发 | **下一优先** | — | 目标：空转 12.02 + 等待 8.15 → ≤8 ms | 统一表后空转+等待占 **80%**（stage1 实测），瓶颈已从算子转到 host 下发 | `profiling/stage1_unified_a2_16384.md` |
+| **O7a** | 整步 NPUGraph 捕获 | `torch.npu.graph(NPUGraph)` 捕获 forward+backward+step | **已测·不可行** | 捕获阶段异常：`copy_between_host_and_device_opapi ... error code 107030` | — | dynamic_emb 的稀疏路径在捕获区内仍做 H2D 拷贝（AICPU 元数据/`to(device)`），aclgraph 不允许；`--probe-graph` 保留了探针，可随时复测 | 本项，探针日志 |
+| **O7b** | 减少每步任务数：EC 单特征 + dedup | 26 个特征打包成 1 个特征（每样本 26 值），改用 EmbeddingCollection（pooling=None）+ `use_index_dedup` | **下一优先** | 待测 | 目标：UBDMA 264 次/步 → 一位数；NOTIFY_WAIT 343 次/步同步下降 | 现每步仍有 ~700 task：NOTIFY_WAIT 343 + UBDMA 264 + DAVID_EVENT_WAIT 11；26 个特征使 all2all 按特征切碎 | `profiling/stage1_unified_a2_16384.md` |
+| O7c | 局部捕获（仅稠密段） | 只捕获 bottom/top MLP + 交互 | 备选 | — | 上限 ~1.3 ms（MatMul 总量） | 稀疏反向不在图内，收益小 | — |
 | O8 | 合并 collective | 统一 alltoall / reduceScatter | **降级** | 26 表时 9.51 ms → 统一表后通信并集 **1.69 ms** | 上限 <1.7 ms | 已验证通信量不是瓶颈（按类求和 8.38 ms 是假象，并集仅 1.69 ms） | `profiling/stage1_unified_a2_16384.md` |
 | O9 | 稠密 bf16 + L1 融合 | 模型精度 | 待做（排最后） | — | 上限 <1.3 ms | 计算类共 6.62 ms，其中 MatMul ≈1.3 ms | `profiling/stage1_unified_a2_16384.md` |
 | O10 | sparse int32 + 合批 H2D | 数据侧 | 待做 | — | 目标：每样本项 0.946 → ≤0.6 µs | 数据侧已证明 ≤1.6 ms，收益有限 | — |
