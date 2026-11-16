@@ -92,8 +92,9 @@ def main():
     results.append(("top 形状", up_top == our_top, f"{up_top} vs {our_top}"))
 
     # 5 稠密侧参数量
+    # 只比稠密侧：排除上游 sparse_arch 与本仓 ebc/ec 里的表参数
     up_n = sum(p.numel() for p in up.parameters() if "sparse_arch" not in _name_of(up, p))
-    our_n = sum(p.numel() for p in ours.parameters())
+    our_n = sum(p.numel() for n, p in ours.named_parameters() if "ebc" not in n and not n.startswith("ec."))
     results.append(("稠密侧参数量", up_n == our_n, f"{up_n:,} vs {our_n:,}"))
 
     print(f"{'判定项':22}{'结果':6}细节")
