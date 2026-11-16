@@ -3,8 +3,13 @@
 
 结构与官方 recsdk-7.1.RC1/examples/dlrm/model/model.py 严格对齐：
   bottom_stack : dense(13) -> 512 -> 256 -> emb_dim  (relu, L1 正则 1e-2)
-  dot 交互     : matmul(x, x^T) 取上三角(不含对角)展平
-  top_stack    : (emb_dim + n_vec*(n_vec-1)) -> 1024 -> 1024 -> 512 -> 256 -> 1
+  dot 交互     : matmul(x, x^T) 取严格上三角(不含对角) 成对点积 -> C(n_vec,2) 维
+  top_stack    : (emb_dim + C(n_vec,2)) -> 1024 -> 1024 -> 512 -> 256 -> 1
+
+对齐基准：torchrec.models.dlrm.DLRM（facebookresearch/dlrm torchrec_dlrm 用的就是它）
+  - InteractionArch: triu_indices(F, F, offset=1)，F = num_sparse + 1 = 27 -> 351 维
+  - DenseArch: 13 -> 512 -> 256 -> 128，每层带 relu（含末层）
+  - OverArch : (128 + 351) -> 1024 -> 1024 -> 512 -> 256 -> 1，末层无激活
 
 稀疏侧用 TorchRec EmbeddingBagCollection，由 dynamic_emb 提供 NPU 上的
 DynamicEmbeddingBagCollectionSharder（HKV 动态稀疏表），
@@ -62,20 +67,21 @@ class DenseMLP(nn.Module):
 
 
 def dot_interaction(x):
-    """DLRM 特征交互：x (B, F, D) -> (B, F*(F-1))  上三角不含对角。
+    """DLRM 特征交互：x (B, F, D) -> (B, C(F,2))，严格上三角（不含对角）。
 
-    对齐 zoo 的 _dot_interaction：
-      xactions = matmul(x, x^T)              # (B,F,F)
-      上三角(含对角)被置零，留下严格下三角
-      reshape -> (B, F*F)
-    官方 dlrm_s_pytorch 的 interact_features 也是这个语义（UpperTriangular 后展平）。
+    对齐 torchrec.models.dlrm.InteractionArch（上游 torchrec_dlrm 的唯一 dot 实现）：
+      xactions = matmul(x, x^T)                                  # (B,F,F)
+      idx      = triu_indices(F, F, offset=1)                     # 严格上三角，C(F,2) 对
+      return xactions[:, idx[0], idx[1]]                          # (B, C(F,2))
+    与旧实现的差别：旧版把含对角上三角置零后展平成 F*F 维（F=27 时 729 维，
+    其中 378 维恒为 0），与上游的 351 维不一致，导致 top 首层宽度对不上。
     """
+    if x.dim() != 3:
+        raise ValueError(f"dot_interaction 期望 (B,F,D)，得到 {tuple(x.shape)}")
     b, f, _ = x.shape
-    xactions = torch.bmm(x, x.transpose(1, 2))  # (B,F,F)
-    ones = torch.ones_like(xactions)
-    upper_tri_mask = torch.triu(ones, diagonal=0)  # 含对角的上三角
-    activations = torch.where(upper_tri_mask.bool(), torch.zeros_like(xactions), xactions)
-    return activations.reshape(b, f * f)
+    idx = torch.triu_indices(f, f, offset=1, device=x.device)
+    xactions = torch.bmm(x, x.transpose(1, 2))
+    return xactions[:, idx[0], idx[1]]
 
 
 # ----------------------------------------------------------------------------
@@ -100,7 +106,8 @@ class DLRMv2(nn.Module):
         self.emb_dim = emb_dim
         # n_vec = num_sparse + 1（dense embedding 向量也算一个"特征"）
         self.n_vec = self.num_sparse + 1
-        self.inter_dim = self.n_vec * self.n_vec
+        # 严格上三角成对点数 = C(n_vec, 2)，与 torchrec.models.dlrm.InteractionArch 一致
+        self.inter_dim = self.n_vec * (self.n_vec - 1) // 2
 
         # bottom: dense -> emb_dim
         self.bot_l = DenseMLP([num_dense] + list(bot_dims) + [emb_dim], last_activation=True)
