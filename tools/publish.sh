@@ -24,6 +24,8 @@ pull() {  # $1=远端文件 $2=本地文件
 }
 
 echo "== 1. 训练日志：摘要行（+ 有效优化项保留压缩全量）=="
+# 清掉上次中断残留的原始日志临时文件（含未脱敏路径，禁止入库）
+rm -f "$LOGS"/.*.tmp 2>/dev/null
 collect_one() {   # $1 = 远端路径
   local f=$1 base tmp
   base=$(basename "$f" .log); tmp="$LOGS/.$base.tmp"
