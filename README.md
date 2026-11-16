@@ -46,6 +46,28 @@ A100 数据取自 facebook `torchrec_dlrm` README 的 Preliminary Training Resul
 | 已解决的三个坑 | ① HCCL 不支持 object collective → planner 的 `broadcast_object_list` 走 gloo 子组；② 表容量需 `% batch_size == 0` 且向上对齐 2 的幂；③ `--dist-type` 决定 key→rank 映射（默认 continuous） |
 | 验收 | 300 步无中断、loss 单调下降、失败即 `RESULT: FAIL` |
 
+### 1.1 执行栈与接口归属
+
+稀疏侧走 RecSDK 的 **`torch_rec_v2`（26.1.0）** 接口（`dynamic_emb` + HKV 动态表），外层容器与 DMP 仍是 **`torchrec 1.2.0+npu`**——属混合栈，不是纯 2.x 新 API。
+
+| 层 | 实际导入 | 来源包 |
+|---|---|---|
+| 稀疏分片器 | `dynamic_emb.distributed.embeddingbag.DynamicEmbeddingBagCollectionSharder` / `.embedding.DynamicEmbeddingCollectionSharder` | torch_rec_v2 26.1.0 |
+| planner / enumerator / 约束 | `DynamicEmbeddingShardingPlanner` / `DynamicEmbeddingEnumerator` / `DynamicEmbParameterConstraints` | torch_rec_v2 |
+| HKV 表配置 | `DynamicEmbTableOptions` / `DynamicEmbCheckMode` / `DynamicEmbInitializerArgs`(`Mode`) / `DynamicEmbScoreStrategy` | torch_rec_v2 |
+| 稀疏优化器枚举 | `EmbOptimType.EXACT_ROWWISE_ADAGRAD`、`SparseType.FP32` | fbgemm_gpu 1.2.0+cpu（**只取枚举**，不调其 kernel） |
+| 模型容器 | `torchrec.EmbeddingBagCollection` / `EmbeddingCollection` | torchrec 1.2.0+npu |
+| 模型并行 | `torchrec.distributed.model_parallel.DistributedModelParallel` | torchrec 1.2.0+npu |
+| 拓扑 / 分片类型 | `torchrec.distributed.planner.Topology`、`torchrec.distributed.types.ShardingType` | torchrec 1.2.0+npu |
+| HKV 运行时 | `libdynamic_variable_base.so`、`libdynamic_emb_op_npu.so` | torch_rec_v2 wheel |
+
+两条容易误判的细节：
+
+1. **V2 分片器建立在 torchrec V1 的类层次上**：`DynamicEmbeddingBagCollectionSharder` 的 MRO 为 `→ EmbeddingBagCollectionSharder → BaseEmbeddingSharder → ModuleSharder`，与 torchrec 共用 sharder 协议。
+2. **planner 侧是独立实现**：`DynamicEmbeddingShardingPlanner` 的基类是 `object`，不继承 torchrec 的 `EmbeddingShardingPlanner`；本仓也未导入 V1 静态 planner（只用 `Topology` / `ShardingType` 两个公共类型）。
+
+版本取证（容器内实测）：存在 `torch_rec_v2-26.1.0.dist-info`；`torchrec` 无 dist-info，`torchrec.__version__` 报 `1.2.0+npu`。
+
 ## 2. 高性能（进行中）
 
 ### 2.1 现状对 A100
