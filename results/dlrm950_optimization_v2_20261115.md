@@ -1,3 +1,5 @@
+> ⚠️ 已被合并版 [`dlrm950_perf_report_v3_20261116.md`](dlrm950_perf_report_v3_20261116.md) 取代（优化 + 诊断合一）。本文件仅作历史留存，其中的 AICore 2.9%、纯 step 口径等旧值不再引用。
+
 # DLRM 在昇腾 950DT 上的性能优化 · v2（摘要）
 
 8 die · Ascend950DT · CANN 9.1.0 · Criteo 1TB 切片（112.3 M 行）· 对照官方 8×A100 40GB。

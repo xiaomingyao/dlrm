@@ -1,3 +1,5 @@
+> ⚠️ 已被合并版 [`dlrm950_perf_report_v3_20261116.md`](dlrm950_perf_report_v3_20261116.md) 取代（优化 + 诊断合一）。本文件仅作历史留存，其中的 AICore 2.9%、纯 step 口径等旧值不再引用。
+
 # dlrm950 优化对比报告 v1
 
 采集：2026-11-15 · Ascend950DT ×8 die · CANN 9.1.0 · 300 步/档、剔前 20 步、取 median
