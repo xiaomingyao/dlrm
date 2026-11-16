@@ -4,6 +4,7 @@
 用法: python3 tools/scrub_check.py [仓库根目录]
 规则与替换建议见下方 PATTERNS。允许清单：results/ 与 profiling/ 的 `.json` 结构数据不受影响。
 """
+import gzip
 import os
 import re
 import sys
@@ -27,20 +28,27 @@ PATTERNS = [
 SKIP_DIRS = {".git", "__pycache__", "node_modules"}
 # 规则文件自身包含模式串，扫描时跳过
 SKIP_FILES = {"tools/scrub_check.py", "tools/publish.sh"}
-SKIP_EXT = {".npz", ".npy", ".npy.gz", ".png", ".jpg", ".pdf", ".gz", ".zip", ".so", ".bin"}
+SKIP_EXT = {".npz", ".npy", ".png", ".jpg", ".pdf", ".zip", ".so", ".bin"}
+# .gz 文本日志要解压后扫描（results/logs/raw/*.log.gz）；npy.gz 这类二进制按后缀单独跳过
+SKIP_COMPOUND_EXT = (".npy.gz",)
 
 hits = []
 for dirpath, dirnames, filenames in os.walk(ROOT):
     dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
     for fn in filenames:
-        if os.path.splitext(fn)[1].lower() in SKIP_EXT:
+        low = fn.lower()
+        if os.path.splitext(fn)[1].lower() in SKIP_EXT or low.endswith(SKIP_COMPOUND_EXT):
             continue
         path = os.path.join(dirpath, fn)
         if os.path.relpath(path, ROOT) in SKIP_FILES:
             continue
         try:
-            text = open(path, encoding="utf-8", errors="ignore").read()
-        except OSError:
+            if low.endswith(".gz"):
+                with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as g:
+                    text = g.read()
+            else:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+        except (OSError, EOFError):
             continue
         for name, pat in PATTERNS:
             for m in re.finditer(pat, text):
