@@ -159,6 +159,9 @@ def main():
     p.add_argument("--num-dense", type=int, default=13, help="稠密特征数（Criteo=13）")
     p.add_argument("--emb-dim", type=int, default=128)
     p.add_argument("--vocab-size", type=int, default=100000, help="每张表行数")
+    p.add_argument("--dense-optim", choices=["sgd", "adagrad"], default="sgd",
+                   help="稠密参数优化器；adagrad = 对齐上游 --adagrad 语义（稠密也用 Adagrad）")
+    p.add_argument("--eps", type=float, default=1e-10, help="Adagrad eps（对齐上游默认）")
     p.add_argument("--bot-dims", type=str, default="512-256", help="bottom MLP 隐层")
     p.add_argument("--top-dims", type=str, default="1024-1024-512-256", help="top MLP 隐层")
     # 训练
@@ -397,18 +400,24 @@ def main():
         plan=plan,
     )
 
-    # ---- 优化器：稠密参数用 SGD（稀疏参数已在 sharder 的 fused optimizer 里）----
+    # ---- 优化器：稠密参数（稀疏参数已在 sharder 的 fused optimizer 里）----
+    # 对齐上游 dlrm_main.py：--adagrad 时稠密参数也用 Adagrad(lr, eps)，否则 SGD(lr)
     dense_params = [p_ for n, p_ in model.named_parameters() if "ebc" not in n]
-    optimizer = torch.optim.SGD(dense_params, lr=args.lr)
+    if args.dense_optim == "adagrad":
+        optimizer = torch.optim.Adagrad(dense_params, lr=args.lr, eps=args.eps)
+    else:
+        optimizer = torch.optim.SGD(dense_params, lr=args.lr)
     criterion = torch.nn.BCEWithLogitsLoss()
 
     log("=== DLRM RecSDK v2 ===")
     log("world_size   =", world_size)
     log("num_sparse   =", args.num_sparse, " num_dense =", args.num_dense)
     log("emb_dim      =", args.emb_dim)
-    log("n_vec        =", args.num_sparse + 1, " inter_dim =", (args.num_sparse + 1) ** 2)
+    n_vec = args.num_sparse + 1
+    log("n_vec        =", n_vec, " inter_dim =", n_vec * (n_vec - 1) // 2, "（严格上三角，对齐 torchrec InteractionArch）")
     log("bot_dims     =", [args.num_dense] + parse_dims(args.bot_dims) + [args.emb_dim])
-    log("top_dims     =", [args.emb_dim + (args.num_sparse + 1) ** 2] + parse_dims(args.top_dims) + [1])
+    log("top_dims     =", [args.emb_dim + n_vec * (n_vec - 1) // 2] + parse_dims(args.top_dims) + [1])
+    log("dense_optim  =", args.dense_optim, " lr =", args.lr, " eps =", args.eps)
     log("dense params =", sum(p_.numel() for p_ in dense_params))
     log("batch(global)=", args.batch_size, " local =", args.batch_size // world_size)
     log("steps        =", args.steps)
