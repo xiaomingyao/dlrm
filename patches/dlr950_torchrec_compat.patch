@@ -1,0 +1,37 @@
+--- a/preview/dlrm/dlrm_main.py
++++ b/preview/dlrm/dlrm_main.py
+@@ -846,6 +846,7 @@
+     constraints = {
+         f"t_{feature_name}": ParameterConstraints(
+             sharding_types=["row_wise"],
++            compute_kernels=["fused"],  # 本地 torchrec(Ascend fork) 强制要求显式给出
+         )
+         for feature_idx, feature_name in enumerate(DEFAULT_CAT_NAMES)
+     }
+@@ -853,25 +854,22 @@
+         # 不指定sharding_type
+         planner = EmbeddingShardingPlanner(
+             topology=Topology(
+-                local_world_size=get_local_size(),
+                 world_size=dist.get_world_size(),
+                 compute_device=device.type,
+             ),
+             batch_size=args.batch_size,
+             # If experience OOM, increase the percentage. see
+-            storage_reservation=HeuristicalStorageReservation(percentage=0.05),
++            constraints=constraints,  # 本地 torchrec 要求显式传入
+         )
+     else:
+         # row_wise
+         planner = EmbeddingShardingPlanner(
+             topology=Topology(
+-                local_world_size=get_local_size(),
+                 world_size=dist.get_world_size(),
+                 compute_device=device.type,
+             ),
+             batch_size=args.batch_size,
+             # If experience OOM, increase the percentage. see
+-            storage_reservation=HeuristicalStorageReservation(percentage=0.05),
+             constraints=constraints,
+         )
+ 

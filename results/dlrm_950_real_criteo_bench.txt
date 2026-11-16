@@ -1,0 +1,98 @@
+# RecSDK DLRM 在 Ascend950DT 上的真实数据吞吐（8 die / 单 die）
+
+采集日期：2026-11-15
+硬件：Ascend950DT ×8 die（单机）· CANN 9.1.0 · 驱动/固件 25.1.rc2 / 7.0.9.100.203
+软件：torch 2.7.1+cpu · torch_npu 2.7.1.post4 · torchrec 1.2.0+npu · fbgemm_ascend 1.2.0
+代码：`recsdk-examples/preview/dlrm`（上游 facebookresearch/dlrm `b631a99` + RecSDK 改动）+ 本仓 `patches/dlr950_torchrec_compat.patch`（3 处 torchrec API 兼容，非硬件相关）
+必须前置：`source $(python -c "import fbgemm_ascend; print(fbgemm_ascend.env_setup_path())")` 注册 37 个 A5 自定义算子
+
+## 1. 数据
+
+| 项 | 值 |
+|---|---|
+| 来源 | Criteo Kaggle Display Advertising Challenge `train.txt`（真实数据，非合成） |
+| 行数 | 45,840,617 |
+| 特征 | 13 dense（`log(x+3)`）+ 26 categorical（按出现顺序重映射为稠密 id） |
+| 表规模 | 26 表合计 **33,440,538 行**（逐特征真实去重数：1460, 583, 10131227, 2202608, 305, 24, 12517, 633, 3, 93145, 5683, 8351593, 3194, 27, 14992, 5461306, 10, 5652, 2173, 4, 7046547, 18, 15, 286181, 105, 142572） |
+| 格式 | TorchRec npy 三件套 `train_{dense,sparse,labels}.npy`（2.4 GB / 9.5 GB / 0.18 GB），`--mmap_mode` |
+| 训练参数 | `--embedding_dim 128 --dense_arch_layer_sizes 512,256,128 --over_arch_layer_sizes 1024,1024,512,256,1 --interaction_type dcn --dcn_num_layers 3 --dcn_low_rank_dim 512 --adagrad --learning_rate 0.005`（对齐 RecSDK `run.sh` 的 MLPerf 配置，仅词表换成真实基数） |
+
+> 与官方口径的差异：RecSDK `run.sh` 面向 Criteo **1TB**（`TOTAL_TRAINING_SAMPLES=4195197692`、690 GB 处理后数据、4 个特征 40M hash 空间、multi-hot 3,2,1,…）。本机仅有 Kaggle 45.8M 行，且是单热。**本文件的 sps 不可与 MLPerf 官方数字直接比较。**
+
+## 2. 结果（8 die，`--limit_train_batches` 截断）
+
+| 全局 batch | 每卡本地 batch | 步时 | 吞吐 | 步数 | 备注 |
+|---:|---:|---:|---:|---:|---|
+| 16384 | 2048 | **258.4 ms**（median, n=131） | **63,406 sps** | 150 | 稳态 it/s 3.870，CV 5.4% |
+| 1024 | 128 | **259.5 ms** | **3,945 sps** | 150 | 与 16384 步时几乎相同 |
+| 256 | 32 | 270 ms | 947 sps | 40 | 同上 |
+
+**关键观察：步时与 batch 几乎无关（32 → 2048 每卡，batch 变化 64×，步时 270 → 258 ms，±4%）**，吞吐随 batch 线性上升 ⇒ 每步存在约 255–285 ms 的固定开销。
+
+表规模对照（同一份 45.8M 行数据，每卡本地 batch 128）：
+
+| 词表 | 表行数合计 | 步时 | 吞吐 |
+|---|---:|---:|---:|
+| 真实基数 | 33.4 M | 259.5 ms | 3,945 sps |
+| 全部设为 8192 | 0.21 M（缩小 157×） | 286 ms | 3,577 sps |
+
+⇒ 固定开销与表规模无关（缩小 157× 步时不变），指向**每步固定成本**（推测：26 张表各自的 bucketize + all2all，前反向各一轮），而非查表/访存本身。
+
+## 3. 单 die 对照（每卡本地 batch 保持不变 = 2048）
+
+| 配置 | 全局 batch | 步时 | 吞吐 |
+|---|---:|---:|---:|
+| 8 die | 16384 | 258.4 ms | 63,406 sps |
+| 1 die | 2048 | ~189 ms（5.27 it/s） | 10,793 sps |
+
+扩展比 **5.87×**，效率 **73.4%**。两端每卡本地 batch 均为 2048，口径可比。
+
+## 4. 精度（非收敛值，仅证链路）
+
+| 步数 | Test AUROC |
+|---:|---|
+| 30 | 0.737086 |
+| 150（8 die, 全局 16384） | 0.781030 |
+| 150（1 die, 全局 2048） | 0.784553 |
+| 40（词表压到 8192） | 0.750305 |
+
+150 步不足单 epoch 的 6%（1 epoch = 2798 步 @ 全局 16384），只说明数据/标签/前向反向链路正常，不代表任务精度。
+
+## 5. 与 dlrm950（RecSDK v2 / dynamic_emb HKV）的同机对照
+
+| 全局 batch（每卡本地） | recsdk-dlrm（静态 TBE + fbgemm_ascend） | dlrm950（HKV 动态表） | 比值 |
+|---|---:|---:|---:|
+| 1024（128） | 259.5 ms → 3,945 sps | 23.667 ms → 43,267 sps（自报 mean 口径 42,825） | 11.0× |
+| 16384（2048） | 258.4 ms → 63,406 sps | 55.366 ms → 295,943 sps（自报 mean 口径 250,413） | 4.7× |
+
+口径边界：
+- dlrm950 用 `dac_sample` 10 万行、26 表基数 2–7546；本侧 45.8M 行、33.4M 行表。但本侧「表缩小 157× 步时不变」说明差距不是表规模造成。
+- 两侧 dense 结构不同（dlrm950 对齐 TF zoo：bottom 512-256-emb + dot 交互 + top 1024×3；本侧为 MLPerf 版 dcn low-rank）。
+- 因此该比值**不能表述为「HKV 比 fbgemm TBE 快 N 倍」**，只能说明：在当前两套配置下，recsdk-dlrm 的步时被每步固定开销主导。
+
+## 6. 复现命令
+
+```bash
+# 环境（容器内）
+PY=<VENV>/torch_v2_pt2.7.1/bin/python
+TR=<VENV>/torch_v2_pt2.7.1/bin/torchrun
+source $($PY -c "import fbgemm_ascend;print(fbgemm_ascend.env_setup_path())")
+export LIB_FBGEMM_NPU_API_SO_PATH=$($PY -c "import fbgemm_ascend,os;print(os.path.join(os.path.dirname(fbgemm_ascend.__file__),'fbgemm_ascend_py_a5.so'))")
+export USE_EC=0 WITH_EMBCACHE=0 WITH_TORCHREC=1
+
+# 8 die / 全局 batch 16384
+$TR --nproc_per_node=8 dlrm_main.py --dataset_name criteo_kaggle \
+  --in_memory_binary_criteo_path <npy 目录> --batch_size 2048 \
+  --epochs 1 --limit_train_batches 150 --limit_val_batches 1 --limit_test_batches 1 \
+  --num_embeddings_per_feature "1460,583,10131227,2202608,305,24,12517,633,3,93145,5683,8351593,3194,27,14992,5461306,10,5652,2173,4,7046547,18,15,286181,105,142572" \
+  --embedding_dim 128 --dense_arch_layer_sizes 512,256,128 \
+  --over_arch_layer_sizes 1024,1024,512,256,1 --interaction_type dcn \
+  --dcn_num_layers 3 --dcn_low_rank_dim 512 --adagrad --learning_rate 0.005 --mmap_mode
+```
+
+## 7. 未做
+
+- 跑满 1 epoch（2798 步）与多轮重复（当前每档仅 1 轮）。
+- msprof 采集单步分解，验证「固定开销 = 26 次 per-table collective」这一推测。
+- EC / embcache 路径（本环境缺 `torchrec_embcache`、`hybrid_torchrec`）。
+- Criteo 1TB（4.195 B 行）口径；本机无该数据集，HF 上的 `criteo/CriteoClickLogs`（690 GB）在本网络不可达。

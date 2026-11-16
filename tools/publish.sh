@@ -11,8 +11,9 @@ CTR=${CTR:?需要设置 CTR（容器名）}
 RTMP=${REMOTE_TMP:-/tmp}
 # 只保留「已验证有效」优化项的完整日志；其余只留摘要行（KB 级），避免仓库膨胀
 KEEP_FULL_RE=${KEEP_FULL_RE:-^un_}
-ROOT=$(cd "$(dirname "$0")/.." && pwd)          # dlrm/
-REPO=$(cd "$ROOT/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/.." && pwd)          # dlrm/ 目录（独立仓时即仓库根）
+# 独立仓（根目录自带 .git）时直接用它；仍嵌在 torch-examples 里时回退到父目录
+if [ -d "$ROOT/.git" ]; then REPO="$ROOT"; else REPO=$(cd "$ROOT/.." && pwd); fi
 LOGS="$ROOT/results/logs"
 mkdir -p "$LOGS"
 

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dlrm950 优化对比报告 v1</title>
+<style>
+  :root{--fg:#1a1a1a;--muted:#666;--line:#e3e3e3;--bg:#fff;--accent:#C00000;--soft:#f7f7f7;--ok:#1a7f37;--warn:#b26a00;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.65}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 28px 64px}
+  h1{font-size:25px;margin:0 0 6px;color:#111}
+  h2{font-size:19px;margin:34px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:16px;margin:20px 0 8px;color:#222}
+  .sub{color:var(--muted);font-size:13.5px;margin-bottom:18px}
+  .kv{background:var(--soft);border-left:4px solid var(--accent);padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;font-size:14.5px}
+  table{width:100%;border-collapse:collapse;margin:10px 0 6px;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#fafafa;font-weight:600;white-space:nowrap}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+  .bar{height:16px;background:#eee;border-radius:3px;position:relative;min-width:120px}
+  .bar span{display:block;height:100%;border-radius:3px}
+  .b-idle span{background:#8e8e8e}
+  .b-hkv span{background:var(--accent)}
+  .b-hccl span{background:#2f6fb0}
+  .b-other span{background:#7fa87f}
+  code{background:#f2f2f2;padding:1px 5px;border-radius:3px;font-size:13px}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;background:#f0f0f0;color:#444;margin-right:6px}
+  .win{color:var(--ok);font-weight:600}
+  .bad{color:var(--accent);font-weight:600}
+  .note{font-size:13px;color:var(--muted);margin-top:6px}
+  footer{margin-top:36px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>dlrm950 优化对比报告 v1</h1>
+<div class="sub">优化前基线 · 对 8×A100 的差距 · 第一轮实验（同步节奏）结果 ｜ 采集 2026-11-15 · Ascend950DT ×8 die · CANN 9.1.0</div>
+
+<div class="kv">
+<b>一句话</b>：优化前 dlrm950 在 Criteo 1TB 切片上达到 A100 的 <b>41%</b>（16384 档 42.90 ms vs 17.70 ms）。第一轮只改"每步同步"节奏，最好只拿到 <b>−7.1%（2048 档）/−2.6%（16384 档）</b>，且同步间隔拉到 50 步反而慢 <b>49%</b>。说明 12.80 ms 的 idle 不是逐步同步造成的，下一轮应转向 <b>HKV 反向 lookup（15.05 ms/步，35%）</b>。
+</div>
+
+<h2>1. 优化前基线 vs A100</h2>
+<table>
+<tr><th>local BS（global）</th><th>实现</th><th class="n">步时 median</th><th class="n">吞吐</th><th class="n">对 A100</th></tr>
+<tr><td>256（2,048）</td><td>A100 ×8</td><td class="n">10.00 ms</td><td class="n">204,800 sps</td><td class="n">—</td></tr>
+<tr><td>256（2,048）</td><td>dlrm950（优化前）</td><td class="n">24.26 ms</td><td class="n">82,988 sps</td><td class="n">41%</td></tr>
+<tr><td>2,048（16,384）</td><td>A100 ×8</td><td class="n">17.70 ms</td><td class="n">925,696 sps</td><td class="n">—</td></tr>
+<tr><td>2,048（16,384）</td><td>dlrm950（优化前）</td><td class="n">42.90 ms</td><td class="n">378,798 sps</td><td class="n">41%</td></tr>
+</table>
+<div class="note">两侧同为 Criteo 1TB（本机取 112.3 M 行切片）、8 卡、dot 交互、MLPerf 词表（collective ≈104 GiB）。A100 值取自 facebook <code>torchrec_dlrm</code> README 的 Preliminary Training Results。</div>
+
+<h3>差距的构成（三点线性拟合）</h3>
+<table>
+<tr><th>实现</th><th class="n">固定项</th><th class="n">每样本项</th><th>16384 档差距拆分</th></tr>
+<tr><td>A100 ×8</td><td class="n">8.90 ms</td><td class="n">0.537 µs</td><td>—</td></tr>
+<tr><td>dlrm950</td><td class="n">22.02 ms</td><td class="n">1.273 µs</td><td>固定项 +13.1 ms（52%）、每样本项 +12.1 ms（48%）</td></tr>
+</table>
+<div class="note">拟合点：global 1024 / 2048 / 16384 三档实测。小 batch（2048）时固定项占比约 90%，大 batch 时降到 52%。</div>
+
+<h2>2. 单步预算（msprof，16384 档）</h2>
+<table>
+<tr><th>项</th><th class="n">每步</th><th class="n">占 wall</th><th>占比</th><th>说明</th></tr>
+<tr><td>idle（设备空转）</td><td class="n">12.80 ms</td><td class="n">29.8%</td><td><div class="bar b-idle"><span style="width:29.8%"></span></div></td><td>非设备执行时间</td></tr>
+<tr><td>HKV 反向 lookup</td><td class="n">15.05 ms</td><td class="n">35.1%</td><td><div class="bar b-hkv"><span style="width:35.1%"></span></div></td><td>24 次/步，615 µs/次</td></tr>
+<tr><td>HCCL 合计</td><td class="n">9.51 ms</td><td class="n">22.2%</td><td><div class="bar b-hccl"><span style="width:22.2%"></span></div></td><td>reduceScatter 3.57 / alltoall 2.17 / launch 1.95 / 其它 1.82</td></tr>
+<tr><td>其余 device</td><td class="n">5.54 ms</td><td class="n">12.9%</td><td><div class="bar b-other"><span style="width:12.9%"></span></div></td><td>MatMul 1.31 / pooling 0.54 / Sort 0.52</td></tr>
+</table>
+
+<h3>已排除的两个猜测</h3>
+<table>
+<tr><th>猜测</th><th>实验</th><th>结果</th></tr>
+<tr><td>数据搬运是瓶颈</td><td><code>--frozen-data</code>（一个 batch 常驻 NPU，循环内不取数）</td><td>16384 省 <b>0.75 ms</b>、2048 省 1.56 ms ⇒ 数据侧 ≤1.6 ms</td></tr>
+<tr><td>HBM 配额不足导致 spill</td><td><code>--hbm-gb 4 → 16</code>（每表 157 MB → 630 MB）</td><td>16384 省 <b>0.87 ms</b>、2048 无变化 ⇒ 不是热集问题</td></tr>
+</table>
+
+<h2>3. 第一轮实验：同步节奏（P2）</h2>
+<p>做法：把每步 <code>torch.npu.synchronize()</code> + <code>loss.item()</code> + acc <code>.item()</code> 改为每 N 步一次（<code>--sync-every</code>），其余不变。</p>
+<table>
+<tr><th>配置</th><th class="n">sync 间隔</th><th class="n">median 步时</th><th class="n">mean</th><th class="n">std</th><th class="n">相对同脚本对照</th></tr>
+<tr><td>16,384</td><td class="n">1（原始）</td><td class="n">45.23 ms</td><td class="n">45.51</td><td class="n">1.63</td><td class="n">—</td></tr>
+<tr><td>16,384</td><td class="n">2</td><td class="n">44.06 ms</td><td class="n">44.28</td><td class="n">0.96</td><td class="n win">−2.6%</td></tr>
+<tr><td>16,384</td><td class="n">4</td><td class="n">44.38 ms</td><td class="n">44.48</td><td class="n">1.03</td><td class="n win">−1.9%</td></tr>
+<tr><td>16,384</td><td class="n">8</td><td class="n">44.92 ms</td><td class="n">45.10</td><td class="n">1.43</td><td class="n win">−0.7%</td></tr>
+<tr><td>16,384</td><td class="n">50</td><td class="n">67.43 ms</td><td class="n">70.05</td><td class="n">10.95</td><td class="n bad">+49%</td></tr>
+<tr><td>2,048</td><td class="n">1（原始）</td><td class="n">23.69 ms</td><td class="n">23.83</td><td class="n">0.90</td><td class="n">—</td></tr>
+<tr><td>2,048</td><td class="n">4</td><td class="n">22.00 ms</td><td class="n">22.22</td><td class="n">0.89</td><td class="n win">−7.1%</td></tr>
+</table>
+
+<h3>三条判据</h3>
+<ol>
+<li><b>逐步同步不是 idle 的来源</b>：1/2/4/8 四档差异 &lt;1.2 ms（±3%），远小于 12.80 ms 的 idle。</li>
+<li><b>"去掉同步" ≠ "流水起来"</b>：同步间隔 50 步时 host 超前下发、队列积压，16384 档反而 67.43 ms（+49%），std 从 1.6 涨到 10.9 ms。</li>
+<li><b>小 batch 才有收益</b>：2048 档同步开销相对占比大，间隔 4 拿到 −7.1%；16384 档设备是瓶颈，改同步几无意义。</li>
+</ol>
+
+<h2>4. 下一轮（按实测收益排序）</h2>
+<table>
+<tr><th>编号</th><th>动作</th><th class="n">现状 → 目标</th><th>判据</th></tr>
+<tr><td>P1</td><td>HKV 反向 lookup：<code>--dist-type</code> 对比、bucket 容量、batched-backward 能否替代 24 次逐表调用</td><td class="n">15.05 → 9.0 ms</td><td>该 kernel ≤9 ms 且调用次数 ≤8</td></tr>
+<tr><td>P3</td><td>训练步 aclgraph / npugraph_ex 捕获（静态 shape、无控制流）</td><td class="n">12.80 → 6.0 ms</td><td>捕获成功且步时不退化</td></tr>
+<tr><td>P4</td><td>HCCL：合并 6 次 launch（1.95 ms 纯启动）、allReduce + allGather 合一</td><td class="n">9.51 → 6.0 ms</td><td>HCCL ≤6 ms</td></tr>
+<tr><td>P5</td><td>dense bf16 + L1 融合</td><td class="n">1.31 → 0.8 ms</td><td>最后做</td></tr>
+</table>
+<div class="kv">
+<b>目标终态</b>：<b>26.5 ms / 617,332 sps（A100 的 67%）</b>；若每样本项同时从 1.273 µs 压到 1.0 µs，可到 <b>25.3 ms / 648,000 sps（70%）</b>。再往上需要放大 batch 摊薄固定项：global 65,536 时约 74 ms / 880k sps。
+</div>
+
+<h2>5. 口径与限制</h2>
+<ul>
+<li><b>数据量</b>：本机 112.3 M 行 vs A100 的 4.19 B 行/epoch；两者都是真实 Criteo 1TB 日志，但样本量差 37×。</li>
+<li><b>会话间波动</b>：同一份脚本两次测量，16384 档 median 42.90 → 42.26 ms，2048 档 24.26 → 20.89 ms（含 675/740 ms 的偶发尖峰）；单次测量不足以判定 1–2 ms 级差异，需 n≥3 取中位。</li>
+<li><b>脚本差异</b>：P2 用副本 <code>dlrm_v2_train_opt.py</code> 跑，对照同为该副本 <code>--sync-every 1</code>；与原始脚本的 42.90 ms 相差约 2.3 ms，属会话波动范围，未做同脚本交叉验证。</li>
+<li><b>profile 口径</b>：只解析 rank0 / device_0；8 rank 的 HCCL 时长会随通信量上升，占比以单 die 为准。</li>
+<li><b>优化器</b>：dlrm950 稠密侧固定 SGD，A100 的 2048 档是 Adagrad，两者收敛口径不同，本报告只比速度。</li>
+</ul>
+
+<footer>dlrm950 优化对比报告 v1 · 2026-11-15 · 数据源：<code>results/dlrm_950_criteo1tb_vs_gpu.txt</code>、<code>results/dlrm950_prof_stage0.txt</code>；实验矩阵在 122 节点容器内顺序执行，300 步/档、剔前 20 步、取 median。</footer>
+
+</div>
+</body>
+</html>

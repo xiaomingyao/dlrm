@@ -1,0 +1,29 @@
+# check_env.py 在 Ascend 950DT 上的实测输出（2026-11-15）
+# 容器 npu-container / CANN 9.1.0 / torch 2.7.1+cpu + torch_npu 2.7.1.post4 / aarch64
+
+== 硬件 ==
+  SOC: Ascend950DT  die 数: 8  HBM: 98304 MB
+  驱动/固件: 25.1.rc2 / 7.0.9.100.203
+== 软件 ==
+  OS: Linux-6.6.0-<KERNEL_BUILD>.r1561_118.hce3.aarch64-aarch64-with-glibc2.35
+  Python 3.11.0  CANN 9.1.0  torch 2.7.1+cpu  torch_npu 2.7.1.post4
+== 依赖 ==
+  OK   torch 2.7.1+cpu
+  OK   torch_npu 2.7.1.post4
+  OK   torchrec 1.2.0+npu
+  OK   fbgemm_ascend 1.2.0
+  OK   fbgemm_gpu 1.2.0+cpu
+  MISS hybrid_torchrec ModuleNotFoundError: No module named 'hybrid_torchrec'
+  MISS torchrec_embcache ModuleNotFoundError: No module named 'torchrec_embcache'
+  MISS rec_cust_ops ModuleNotFoundError: No module named 'rec_cust_ops'
+== fbgemm_ascend 算子产物 ==
+  扫描 292 个 .so，命中本机 SOC 字符串 175 个
+  opp 下厂商目录: A2, A3, A5
+    
+    opp/A2/vendors/asynchronous_complete_cumsum/op_impl/ai_core/tbe/op_tiling
+    opp/A2/vendors/asynchronous_complete_cumsum/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64
+    opp/A2/vendors/asynchronous_complete_cumsum/op_proto/lib/linux/aarch64
+    opp/A2/vendors/backward_codegen_adagrad_unweighted_exact/op_impl/ai_core/tbe/op_tiling
+    opp/A2/vendors/backward_codegen_adagrad_unweighted_exact/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64
+
+[VERDICT] 环境就绪

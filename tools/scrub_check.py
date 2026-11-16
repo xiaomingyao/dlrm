@@ -11,7 +11,8 @@ import sys
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PATTERNS = [
-    ("IPv4",        r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    # 排除固件/内核等 5 段版本号（如 7.0.9.100.203）与非法段值；环回地址不算敏感
+    ("IPv4",        r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}(?![\d.])"),
     ("工号/账号",    r"\bx0\d{7}\b"),
     ("内网数据盘",   r"/mnt/paas"),
     ("CANN 安装路径", r"/usr/local/Ascend"),

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DLRM 昇腾 950 优化报告 v2</title>
+<style>
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;margin:0;padding:32px 40px;background:#f6f7f9;color:#1f2329;line-height:1.65}
+  h1{font-size:26px;margin:0 0 6px;color:#c00000}
+  .sub{color:#646a73;font-size:13px;margin-bottom:26px}
+  h2{font-size:18px;margin:34px 0 12px;padding-left:10px;border-left:4px solid #c00000}
+  table{border-collapse:collapse;width:100%;background:#fff;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.06);margin:10px 0 6px}
+  th,td{border:1px solid #e5e6eb;padding:8px 10px;text-align:left}
+  th{background:#f2f3f5;font-weight:600}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.best td{background:#fff7f7;font-weight:600}
+  .ok{color:#0e8a3e;font-weight:600}
+  .no{color:#c00000;font-weight:600}
+  .note{font-size:12px;color:#646a73;margin:4px 0 0}
+  .cards{display:flex;gap:14px;margin:14px 0 4px;flex-wrap:wrap}
+  .card{flex:1 1 200px;background:#fff;border:1px solid #e5e6eb;border-radius:6px;padding:14px 16px}
+  .card .k{font-size:12px;color:#646a73}
+  .card .v{font-size:22px;font-weight:700;margin-top:4px}
+  code{background:#f2f3f5;padding:1px 5px;border-radius:3px;font-size:12px}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:3px 0}
+</style>
+</head>
+<body>
+
+<h1>DLRM 在昇腾 950DT 上的性能优化 · v2</h1>
+<div class="sub">8 die · Ascend950DT · CANN 9.1.0 · Criteo 1TB 切片（112.3 M 行，MLPerf 词表 104 GiB） · 对照组：官方 8×A100 40GB<br>
+口径：每档多次取 median，稳态剔除前 20 步；「端到端」= 步时 + host 取数</div>
+
+<h2>1. 结论</h2>
+<div class="cards">
+  <div class="card"><div class="k">A1 档（2,048）</div><div class="v">134%</div><div class="k">对 A100 204,800 sps</div></div>
+  <div class="card"><div class="k">A2 档（16,384）</div><div class="v">109%</div><div class="k">对 A100 925,696 sps</div></div>
+  <div class="card"><div class="k">A4 档（131,072）</div><div class="v">177%</div><div class="k">对 A100 1,190,128 sps¹</div></div>
+  <div class="card"><div class="k">相对优化前</div><div class="v">2.8×</div><div class="k">A2：40.27 → 16.23 ms</div></div>
+</div>
+<p class="note">¹ A100 的 A4 档用 DCN v2 交互，本实现只有 dot（算力需求更低），该行不是同模型对比，只作规模参考。</p>
+
+<table>
+<tr><th>档</th><th class="num">global batch</th><th class="num">每卡本地</th><th>最佳配置</th><th class="num">步时 ms</th><th class="num">取数 ms</th><th class="num">端到端 ms</th><th class="num">吞吐 sps</th><th class="num">对 A100</th></tr>
+<tr class="best"><td>A1</td><td class="num">2,048</td><td class="num">256</td><td>统一表 + EBC</td><td class="num">6.92</td><td class="num">0.52</td><td class="num">7.44</td><td class="num">275,000</td><td class="num ok">134%</td></tr>
+<tr class="best"><td>A2</td><td class="num">16,384</td><td class="num">2,048</td><td>统一表 + EC + dedup</td><td class="num">14.70</td><td class="num">1.53</td><td class="num">16.23</td><td class="num">1,009,000</td><td class="num ok">109%</td></tr>
+<tr class="best"><td>A4</td><td class="num">131,072</td><td class="num">16,384</td><td>统一表 + EC + dedup</td><td class="num">56.60</td><td class="num">5.70</td><td class="num">62.30</td><td class="num">2,104,000</td><td class="num ok">177%</td></tr>
+</table>
+
+<h2>2. 优化路径（三步，各有判据）</h2>
+<table>
+<tr><th>步骤</th><th>做法</th><th class="num">A1 步时</th><th class="num">A2 步时</th><th>判据 / 证据</th></tr>
+<tr><td>基线</td><td>26 张动态表，每步 24 次查表反向</td><td class="num">21.19</td><td class="num">40.27</td><td>n=3 锚定，A100 的 47% / 44%</td></tr>
+<tr><td>统一表</td><td>26 表合 1（各特征 id 区间互不重叠，数学等价）</td><td class="num">6.78</td><td class="num">20.34</td><td>−68.0% / −49.5%；AUC −0.005 / −0.002</td></tr>
+<tr><td>EC + dedup</td><td>26 特征打包成 1 个特征（每样本 26 值）+ <code>use_index_dedup</code></td><td class="num">9.89（不用）</td><td class="num">20.34 → 16.31</td><td>A2 −19.8%；唯一 id 42.6 万 → 12.6 万；A1 反而 +46%，故按档选配置</td></tr>
+<tr><td>大 batch</td><td>每卡本地 2,048 → 16,384</td><td class="num">—</td><td class="num">56.60（131k 档）</td><td>固定开销摊薄，端到端 2.10 M sps</td></tr>
+<tr><td>取数固化</td><td>加载期一次性 log1p + dtype，训练期只切片</td><td class="num">—</td><td class="num">取数 12.5 → 5.7 ms（131k）</td><td>不影响纯计算口径，只改端到端</td></tr>
+</table>
+
+<h2>3. 单步预算：瓶颈已经换位两次</h2>
+<table>
+<tr><th>项</th><th class="num">基线（A2）</th><th class="num">统一表（A2）</th><th class="num">EC+dedup（A2）</th><th class="num">EC+dedup（A4）</th></tr>
+<tr><td>计算（Cube/Vector）</td><td class="num">6.62</td><td class="num">6.62</td><td class="num">2.30</td><td class="num">10.26</td></tr>
+<tr><td>通信</td><td class="num">9.51</td><td class="num">1.69</td><td class="num">5.44</td><td class="num">18.49</td></tr>
+<tr><td>查表反向</td><td class="num">15.05</td><td class="num">3.41</td><td class="num">0.08</td><td class="num">≈0.1</td></tr>
+<tr><td>空转 + 等待</td><td class="num">12.80 + —</td><td class="num">12.02 + 8.15</td><td class="num">13.8</td><td class="num">≈30</td></tr>
+</table>
+<p class="note">不同阶段由不同工具采集（msprof / torch_npu.profiler），窗口含 profiler 扰动 1.19–1.30×，只用于看结构与占比；绝对步时一律取无 profiler 的 runner。</p>
+
+<h2>4. 硬件到底用没用满</h2>
+<table>
+<tr><th>指标</th><th class="num">实测</th><th>含义</th></tr>
+<tr><td>MatMulV3 cube_utilization</td><td class="num ok">均值 91.3% / 峰值 99.5%</td><td>稠密矩阵乘在 Cube 上接近打满，算子侧无优化空间</td></tr>
+<tr><td>MatMulV3 aic_mac_ratio</td><td class="num">0.77</td><td>MAC 占比高，不是搬运瓶颈</td></tr>
+<tr><td>宿主 AICore / AIVector 占用</td><td class="num no">2.9% / 0.6%</td><td>整机大部分时间没有任务可做</td></tr>
+<tr><td>HBM 带宽占用</td><td class="num no">0%（采样精度以下）</td><td>折算约 19 GB/s，远低于带宽上限</td></tr>
+<tr><td>每步 kernel 数</td><td class="num">536 → 173</td><td>dedup 后长尾算子大幅减少</td></tr>
+</table>
+<p class="note">结论：<b>不是算得慢，是喂不饱</b>。950 的算力已用满，真正没发挥的是「每步有效工作量」——小 batch 下固定开销占主导，大 batch 才能把 HBM（96 GB/die）与 UB 互联换成吞吐。</p>
+
+<h2>5. 优化项账本（有效 / 无效都留证）</h2>
+<table>
+<tr><th>项</th><th>结论</th><th>效果</th></tr>
+<tr><td>统一表（26 合 1）</td><td class="ok">有效</td><td>A1 −68.0%、A2 −49.5%</td></tr>
+<tr><td>EC 单特征 + index dedup</td><td class="ok">有效（仅大 batch）</td><td>A2 −19.8%；A1 +46%，故 A1 保持 EBC</td></tr>
+<tr><td>取数固化</td><td class="ok">有效</td><td>131k 档取数 12.46 → 5.2~6.2 ms</td></tr>
+<tr><td>加大每卡本地 batch</td><td class="ok">有效（规模项）</td><td>端到端 1.01 M → 2.10 M sps</td></tr>
+<tr><td><code>TASK_QUEUE_ENABLE=2</code></td><td class="ok">小幅有效</td><td>A2 +2.7%（三轮同向，均值 +7%）；A4 −2.9%</td></tr>
+<tr><td>同步节奏 / roundrobin / hbm-gb / frozen-data</td><td class="no">无效</td><td>差异均在噪声内或反向</td></tr>
+<tr><td>all2all 载荷 bf16（qcomm）</td><td class="no">无效</td><td>64k 档 +16%（cast kernel 开销大于字节节省）</td></tr>
+<tr><td>HCCL_OP_EXPANSION_MODE=AIV</td><td class="no">无效</td><td>A4 57.78 → 58.52 ms</td></tr>
+<tr><td>HCCL_BUFFSIZE=1024</td><td class="no">显著变差</td><td>A4 57.78 → 67.29 ms</td></tr>
+<tr><td>整步 NPUGraph 捕获</td><td class="no">不可行</td><td>dynamic_emb 稀疏路径含 H2D 拷贝，捕获报 107030</td></tr>
+</table>
+
+<h2>6. 还剩什么</h2>
+<ul>
+<li><b>通信与计算重叠</b>：A2 单次 −4%，与 <code>TASK_QUEUE_ENABLE=2</code> 不叠加；A4 无收益（bottom MLP 太小）。</li>
+<li><b>减少 all2all 实例</b>：A4 档 alltoall 合计 18.5 ms/步，形状特化出 100 个 kernel 名；需在 dynamic_emb 内做计数对齐，属侵入改动，上限约 4–6 ms。</li>
+<li><b>2× 在 A2 档到不了</b>：需 8.85 ms，当前 16.23 ms。即使通信全重叠 + collective 合并，乐观 10–11 ms。</li>
+<li><b>线性扩展（多机）未验证</b>：这是 950 的 UB 优势该发挥作用的地方，需第二节点。</li>
+</ul>
+
+<h2>7. 可复现</h2>
+<p class="note">代码与全部原始数据在私有仓 <code>dlrm/</code>：<code>OPERATIONS.md</code>（目标与口径）、<code>OPTIMIZATIONS.md</code>（O1–O18 账本）、<code>profiling/</code>（三次 profile 分解）、<code>results/</code>（各档原始锚定值）、<code>tools/publish.sh</code>（每 5 分钟自动发布，含脱敏闸门）。</p>
+
+</body>
+</html>

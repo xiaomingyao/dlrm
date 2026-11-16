@@ -1,0 +1,51 @@
+# dlrm950 阶段 0：单步设备侧分解（锚定 A100 用例）
+
+采集：2026-11-15 · 122 · Ascend950DT ×8 die · CANN 9.1.0 · `msprof --ai-core=on --aicpu=on --model-execution=on`
+配置：`--batch-size 16384`（全局）· 1TB 切片（day0-5 训 / day6 测）· MLPerf 词表 · dot 交互 · 20 步
+数据源：rank0 / device_0 的 `op_summary_*.csv`（窗口 = 首次到末次 `lookup_backward_v2_kernel`，跨度 1.326 s）
+
+## 1. 每步预算（wall 42.90 ms，实测 8 die）
+
+| 项 | 每步 | 占 wall | 调用数/步 | 说明 |
+|---|---:|---:|---:|---|
+| **idle（host 下发/同步空档）** | **12.80 ms** | **29.8%** | — | 非设备执行时间 |
+| HKV `lookup_backward_v2_kernel` | **15.05 ms** | **35.1%** | 24 | 平均 615 µs/次，单次最大的 kernel |
+| HCCL 合计 | **9.51 ms** | **22.2%** | 6–7 | 见下表 |
+| 其余 device（dense MLP、pooling、Sort/Cumsum 等） | 5.54 ms | 12.9% | ~500 | MatMulV3 1.31 / pooling 0.54 / Sort 0.52 |
+| 合计 device busy | 30.10 ms | 70.3% | 536 | 每步 536 个 task |
+
+### HCCL 明细（每步）
+
+| kernel | ms/步 | 次数/步 |
+|---|---:|---:|
+| `hcom_reduceScatter_AicpuKernel` | 3.57 | 1 |
+| `hcom_alltoall_AicpuKernel` | 2.17 | 1 |
+| `HcclLaunchAicpuKernel`（纯启动开销） | 1.95 | 6 |
+| `hcom_allReduce_AicpuKernel` | 0.76 | 1 |
+| `hcom_allGather_AicpuKernel` | 0.58 | 1 |
+| `hcom_alltoallv_AicpuKernel` | 0.48 | 2 |
+
+## 2. 结论
+
+1. **通信不是主因，且已经是合并的**：每步只有 6–7 次 HCCL、9.51 ms（22%）。此前「26 张表各一次 collective」的推测属于 **recsdk-dlrm** 的模型，不适用于 dlrm950，不要往「合并 collective」方向做优化。
+2. **最大单项是 HKV 反向 lookup**：15.05 ms（35%），24 次/步、单次 615 µs。
+3. **第二大项是 idle**：12.80 ms（30%），说明 host 侧逐 op 下发与每步同步仍占了近三成。
+4. 稠密侧很小（MatMul 1.31 ms），bf16 之类最多拿回 0.5 ms，优先级最低。
+
+## 3. 优化目标（线性外推，非实测）
+
+| 项 | 现状 | 目标 | 预期收益 |
+|---|---:|---:|---:|
+| HKV lookup/bwd | 15.05 ms | 9.0 ms | −6.05 |
+| HCCL | 9.51 ms | 6.0 ms | −3.51 |
+| idle | 12.80 ms | 6.0 ms | −6.80 |
+| 其余 device | 5.54 ms | 5.54 ms | 0 |
+| **合计** | **42.90 ms** | **26.5 ms** | **−16.4** |
+
+对应 **617,332 sps（对 A100 925,696 的 67%）**；2048 档若只压 idle：24.26 → 17.46 ms（117,297 sps，对 204,800 的 57%）。
+
+## 4. 采集口径与限制
+
+- 只解析了 rank0/device_0；8 rank 的 HCCL 时长会随通信量上升，占比以单 die 为准。
+- 窗口 1.326 s / 20 步 = 66 ms/步，含每步之间的空隙；busy 比例按 20×42.9 ms 归一。
+- `op_statistic` 全量（含 init）里 `allocate_bucket_*` 有 66.7 万次调用，但训练步内只有少量，**不要被全量统计误导**。

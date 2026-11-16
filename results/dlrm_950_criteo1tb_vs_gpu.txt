@@ -1,0 +1,83 @@
+# Criteo 1TB 真实数据：recsdk-dlrm / dlrm950 / GPU(A100) 三维对照
+
+采集：2026-11-15 · 122 节点 · Ascend950DT ×8 die · CANN 9.1.0 · torch 2.7.1+cpu / torch_npu 2.7.1.post4 / torchrec 1.2.0+npu / fbgemm_ascend 1.2.0
+
+## 1. 数据（本机自建的 Criteo 1TB 切片）
+
+| 项 | 值 |
+|---|---|
+| 源 | `hf-mirror.com` → `criteo/CriteoClickLogs`（HF 上 4.37 B 行 parquet，976 文件，43.7 GiB） |
+| 已下 | `data/day=2015-02-15` 分区 **250 个 parquet，11.4 GiB**，HTTP 206 校验通过 |
+| 转换 | parquet → TorchRec `criteo_1t` 三件套：`day_{0..23}_{dense,sparse,labels}.npy`；dense=`log(max(x,0)+3)` float32，sparse 为 8 位 hex 解析后 **& 0x7FFFFFFF** 的 int32，labels int32 |
+| 规模 | **112,307,900 行**，16.7 GiB（160 B/行：13×4 + 26×4 + 4） |
+| 转换吞吐 | 单进程 524 000 行/s（24 片 × 12 并发，250 文件约 4 分钟） |
+| 校验 | hex→int32 逐值比对通过（`categorical_feature_1/7` 前 5 行 want==got） |
+| 词表 | MLPerf 口径（`run.sh` 同款）：4 个特征 40 M，其余真实基数 → collective 表 ≈ **104 GiB**，与 A100 基线同量级 |
+| 二次转换 | 另导出 day 0–6（**24.5 M 行**）为 dlrm950 的 npz（`X_int/X_cat/y`，sparse 先按词表取模） |
+
+> 不是 4.19 B 行全量：本机只有这一个分区可用（另 3 个分区未下）。数据本身是真实 Criteo 1TB 日志，不是合成数据。
+
+## 2. 实测（8 die）
+
+| 实现 | local BS（global） | 交互 / 优化器 | 步时 | 吞吐 | AUROC |
+|---|---:|---|---:|---:|---:|
+| **recsdk-dlrm** | 256（2048） | DCN / Adagrad | 278 ms | **7,356 sps** | 0.6945 |
+| **recsdk-dlrm** | 2048（16384） | DCN / Adagrad | 261 ms | **62,690 sps** | 0.7525 |
+| **dlrm950** | 256（2048） | Dot / 稀疏 Adagrad + 稠密 SGD | 24.26 ms | **82,988 sps** | — |
+| **dlrm950** | 2048（16384） | Dot / 同上 | 42.90 ms | **378,798 sps** | — |
+
+口径：recsdk-dlrm 用 112.3 M 行、104 GiB 表；dlrm950 用 24.5 M 行子集（其 loader 是全内存 npz，装不下 112 M × 26 列 float64）、表由数据 max+1 推导（4 个特征 40 M）。
+dlrm950 的 throughput 用脚本自报（mean 口径）；median 口径一致（24.260 / 42.903 ms）。
+
+## 3. 与 A100 同一张表对比
+
+GPU 列取自 facebook `torchrec_dlrm/README.MD` Preliminary Training Results（8×A100 40GB、Criteo 1TB、collective emb 104.54 GiB、AUROC 为跑满 1 epoch / 4.19 B 行后的值）：
+
+| local BS（global） | 交互 / 优化器 | A100 ×8 | recsdk-dlrm<br>Kaggle 45.8 M | recsdk-dlrm<br>1TB 112 M | dlrm950<br>10 万行 | dlrm950<br>1TB 24.5 M | 达成率<br>(对 A100 同配置) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 256（2,048） | **Dot / SGD** | 204,800 | — ¹ | — ¹ | 84,696 | **82,988** | **40.5%** |
+| 256（2,048） | DCN / Adagrad | 无此配置 | 7,811 | 7,356 | 不支持 ² | 不支持 ² | — |
+| 2,048（16,384） | **Dot / Adagrad** | 925,696 | — ¹ | — ¹ | 295,943 | **378,798** | **40.9%** |
+| 2,048（16,384） | **DCN v2 / Adagrad** | 901,120 | 60,286 | **62,690** | 不支持 ² | 不支持 ² | **7.0%** |
+| 2,048（16,384） | DCN v2 / SGD | 无此配置 | 60,900 ³ | 未跑 | 不支持 ² | 不支持 ² | — |
+| 16,384（131,072） | DCN v2 / Adagrad | 1,190,128 | 未跑 | 未跑 | 不支持 ² | 不支持 ² | — |
+
+¹ recsdk-dlrm 的 `--interaction_type original`（Dot）在 `dlrm_main.py:709` 强制 `from hybrid_torchrec import HashEmbeddingBagCollection`，本环境无该包，故无法运行；不是「没跑」。
+² dlrm950 的 dense 模型固定为 dot 交互，无 DCN 分支，也没有优化器开关（稀疏 Adagrad + 稠密 SGD 写死）。
+³ lr 0.006 + SGD 未收敛（AUROC 0.5320），仅取速度值。
+
+同数据横向比（本次实测，8 die，local batch 对齐）：
+- 1TB 切片，local 256：dlrm950 82,988 vs recsdk-dlrm 7,356 = **11.3×**
+- 1TB 切片，local 2048：dlrm950 378,798 vs recsdk-dlrm 62,690 = **6.0×**
+- Kaggle，local 2048：dlrm950 295,943 vs recsdk-dlrm 60,286 = 4.9×
+
+## 4. 结论与限制
+
+1. **同数据、同 8 卡、同 local batch 下，dlrm950 比 recsdk-dlrm 快 11.3×（256）/ 6.0×（2048）**。差异来源已在前面定位：recsdk-dlrm 每步有 ~255–285 ms 固定开销，且与 batch、表规模都无关（1 die 也复现 185 ms），指向 26 张表各自的算子链 + collective；dlrm950 的 batched HKV 把这一步压到 ~24 ms。
+2. **对 A100 的达成率**：recsdk-dlrm 7.0%（2048/DCN 同配置）、dlrm950 40.9%（2048/Dot）。
+3. **不可比项（必须随数字一起引用）**：
+   - 数据量：112 M / 24.5 M 行 vs MLPerf 4.19 B 行/epoch；
+   - 模型：recsdk-dlrm 为 MLPerf 版 DCN（low-rank 512），dlrm950 为 zoo 对齐版 dot 交互，dense 结构不同；
+   - 优化器：recsdk-dlrm 稀疏+稠密都是 Adagrad；dlrm950 稀疏 Adagrad + 稠密 SGD（脚本无开关）；
+   - 表机制：静态 TBE 全量驻 HBM vs HKV 只物化被访问的 key。
+4. 因此上表是「同维度并列」，**不能表述为「昇腾比 A100 慢 X 倍」或「HKV 比 TBE 快 Y 倍」** 的通用结论。
+
+## 5. 复现
+
+```bash
+# 1) 数据：hf-mirror 下载一个分区（250 文件 / 11.4 GiB）
+curl -L --retry 5 -C - -o <file> https://hf-mirror.com/datasets/criteo/CriteoClickLogs/resolve/main/data/day=2015-02-15/<file>
+# 2) 转 npy（24 片并行）
+seq 0 23 | xargs -P 12 -I{} python /tmp/conv1tb3.py <parquet_dir> <out_dir> {} 24
+# 3) recsdk-dlrm（MLPerf 词表）
+LOCAL_BS=2048 TAG=mp2048 bash /tmp/bench3.sh
+# 4) dlrm950（npz 子集）
+torchrun --nproc_per_node=8 dlrm_v2_train.py --batch-size 2048 --epochs 1 --steps 300 \
+  --data-dir <npy_dir> --train-days 0,1,2,3,4,5 --test-days 6
+```
+
+## 6. 未做
+
+- 全量 4 个分区（≈4.37 B 行）下载与转换：按实测 160 B/行 需 ~651 GiB，`/data` 现余 789 GiB，**可行但只剩 ~90 GiB 余量**；若用 int64 sparse（官方脚本默认）需 1,074 GiB，**放不下**。
+- recsdk-dlrm 的 `--interaction_type original`（Dot）在本环境不可测：代码强制 `from hybrid_torchrec import HashEmbeddingBagCollection`（`dlrm_main.py:709`），该包未安装。
+- msprof 单步分解，用于坐实「26 次 per-table collective ≈ 255 ms」这一推断。

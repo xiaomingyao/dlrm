@@ -1,0 +1,68 @@
+# 原始输出摘录（2026-11-15，122 节点 npu-container 容器，8 die）
+
+只保留判定行；日志中的 `BoundsCheckIndicesV1` 刷屏已剔除。
+`GLOBAL_BS` 字段是脚本标签（固定写 16384），真实全局 batch = LOCAL_BS × world_size，见每行 `WS` / `LOCAL_BS`。
+
+## recsdk-dlrm（preview/dlrm + patches/dlr950_torchrec_compat.patch）
+
+### 8 die，local 2048 → 全局 16384，150 步
+```
+Train avg speed: 3.7830 its/s
+Test AUROC: 0.781030
+ELAPSED_S w8_150 64.57 WS 8 STEPS 150 GLOBAL_BS 16384 LOCAL_BS 2048
+```
+稳态（剔前 20 步，n=131）：it/s mean 3.873 / median 3.870 / std 0.210 / min 3.380 / max 4.340
+→ sps(median) = 63,406，步时(median) = 258.4 ms，CV = 5.4%
+
+### 8 die，local 128 → 全局 1024，150 步
+```
+Train avg speed: 3.8531 its/s
+Test AUROC: 0.774434
+ELAPSED_S w8_150_b128 61.25 WS 8 STEPS 150 GLOBAL_BS 16384 LOCAL_BS 128
+```
+→ 3.8531 it/s × 1024 = 3,945 sps，步时 259.5 ms
+
+### 8 die，local 32 → 全局 256，40 步
+```
+ELAPSED_S w8_40_b32 24.59 WS 8 STEPS 40 GLOBAL_BS 16384 LOCAL_BS 32
+```
+尾段 it/s 3.70 → 947 sps，步时 270 ms
+
+### 8 die，local 128 + 词表全部压到 8192（表行数 33.4 M → 0.21 M），40 步
+```
+Train avg speed: 3.4932 its/s
+Test AUROC: 0.750305
+ELAPSED_S w8_40_smalltbl 34.43 WS 8 STEPS 40 GLOBAL_BS 16384 LOCAL_BS 128
+```
+→ 3.4932 it/s × 1024 = 3,577 sps，步时 286 ms
+
+### 1 die，local 2048 → 全局 2048，150 步
+```
+Train avg speed: 5.2774 its/s
+Test AUROC: 0.784553
+ELAPSED_S w1_150_2048 45.77 WS 1 STEPS 150 GLOBAL_BS 16384 LOCAL_BS 2048
+```
+→ 5.2774 it/s × 2048 = 10,807 sps（尾段稳态 ≈ 5.27 it/s）
+
+## dlrm950（RecSDK v2 / dynamic_emb HKV，`/data/dlrm950/v2`）
+
+### 8 die，全局 batch 1024（local 128），3 epoch × 83 步
+```
+step_time_ms  = mean=23.911 median=23.667 min=21.505 max=31.388 std=1.551
+throughput    = 42825.3 samples/s (global)
+RESULT: PASS (loss rel_change=-39.38%)
+```
+
+### 8 die，全局 batch 16384（local 2048），40 epoch × 7 步
+```
+step_time_ms  = mean=65.428 median=55.366 min=54.052 max=1942.822 std=134.796
+throughput    = 250412.7 samples/s (global)
+RESULT: PASS (loss rel_change=-68.94%)
+```
+（max 1942.8 ms 为首步尖峰，median 口径 sps = 295,943）
+
+## 换算口径说明
+
+- 本仓 sps = 真实全局 batch ÷ 步时(median)；dlrm950 脚本自报 throughput 用 mean 步时，两者差异见上。
+- 步时对比只在「每卡本地 batch 相等」时成立：1024/8 = 128 ↔ 128；16384/8 = 2048 ↔ 2048。
+- 扩展比只允许在每卡本地 batch 相等时计算（8 die local 2048 vs 1 die local 2048）。
