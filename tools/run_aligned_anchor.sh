@@ -11,7 +11,11 @@ cd "$DIR" || exit 2
 echo "STEPS=$STEPS WARMUP=$WARMUP REP=$REP DATA=$DATA EXTRA=$EXTRA start=$(date +%H:%M:%S)" >> "$OUT"
 
 run_one() {  # $1=tag $2=global_bs $3=dense_optim
-  local tag=$1 bs=$2 opt=$3 log="$DIR/anchor_aligned_${tag}.log"
+  local tag="$1"
+  local bs="$2"
+  local opt="$3"
+  local log="$DIR/anchor_aligned_${tag}.log"
+  : > "$log"
   echo "=== $tag start $(date +%H:%M:%S) bs=$bs dense_optim=$opt ===" >> "$OUT"
   torchrun --nproc_per_node="$NPROC" --master_port=$((32000 + RANDOM % 500)) dlrm_v2_train.py \
     --batch-size "$bs" --epochs 1 --eval-every 0 --warmup "$WARMUP" --steps "$STEPS" \
