@@ -15,7 +15,7 @@
 | 历史产物 | 节点上已有的日志、csv、profile 是历史证据，保留原样、不回写本仓 |
 | 节点缺文件 | 以本仓为准补齐；不允许在节点上"就地改一版"再想同步回来 |
 | 性能数字 | 唯一出处 `results/dlrm_torchrecv2_report_v6_20261120.md` / `.html`（**v6：目标 1.5× A100**，全表带 `samples/s` 与 `batch/s`）；本 README 与 `results/*_anchor.txt` 均从它同步 |
-| GPU 对照实现 | `<待填：GPU 代码实现地址>`（A100 侧数值的来源；填入后本行与报告 §1.1 同步补链接） |
+| GPU 对照实现 | `https://github.com/facebookresearch/dlrm/tree/main/torchrec_dlrm`（A100 侧数值来源；原型 `dlrm_s_pytorch.py` + `torchrec_dlrm` 两套，本报告锚 A100 官方 Preliminary Training Results） |
 
 
 ## 项目目标与现状
@@ -27,7 +27,7 @@
 | 3 | **线性扩展**：单机 8 die → 多机 | 🔴 未验证 | 仅单机 8 die 有数据 | 判据：8→16 die 扩展比 ≥1.6（效率 ≥80%），见 §3 |
 | 4 | **高性能 HKV** | 🟡 已量化，未优化 | 单步 `lookup_backward_v2_kernel` 15.05 ms（35%），24 次/步、615 µs/次 | 目标 ≤9 ms；判据见 §2.4 P1 |
 
-A100 数据取自 facebook `torchrec_dlrm` README 的 Preliminary Training Results（8×A100 40GB、Criteo 1TB、collective emb 104.54 GiB、dot 交互）；本机用同一份 Criteo 1TB 日志的 112.3 M 行切片 + MLPerf 词表（≈104 GiB）复测。
+A100 数据取自 [facebookresearch/dlrm · torchrec_dlrm](https://github.com/facebookresearch/dlrm/tree/main/torchrec_dlrm) 的 Preliminary Training Results（8×A100 40GB、Criteo 1TB、collective emb 104.54 GiB、dot 交互）；本机用同一份 Criteo 1TB 日志的 112.3 M 行切片 + MLPerf 词表（≈104 GiB）复测。
 
 ## 目录
 
@@ -76,7 +76,7 @@ A100 数据取自 facebook `torchrec_dlrm` README 的 Preliminary Training Resul
 
 ### 2.0 目标与复核（2026-11-20 更新）
 
-**目标**：在 **昇腾 950DT ×8 die + TorchRec V2**（`torch_rec_v2` 26.1.0 + `torchrec` 1.2.0+npu）上，端到端吞吐达 **8×A100 同档的 1.5 倍**。**GPU 对照实现**：`<待填：GPU 代码实现地址>`。
+**目标**：在 **昇腾 950DT ×8 die + TorchRec V2**（`torch_rec_v2` 26.1.0 + `torchrec` 1.2.0+npu）上，端到端吞吐达 **8×A100 同档的 1.5 倍**。**GPU 对照实现**：`https://github.com/facebookresearch/dlrm/tree/main/torchrec_dlrm`。
 
 | 档 | A100 锚（ms / sps） | **1.5× 目标** | 目标 samples/s | 目标 batch/s | 当前实测 | 达成率 | 缺口 |
 |---|---:|---:|---:|---:|---:|---:|---:|

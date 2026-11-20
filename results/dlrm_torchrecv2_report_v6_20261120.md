@@ -39,7 +39,7 @@ sps 沿用账本对外取整值（275,000 / 1,015,600 / 2,104,000）；按其 ms
 
 **项目目标**：在 **昇腾 950DT ×8 die + TorchRec V2 栈**（`torch_rec_v2` 26.1.0 + `torchrec` 1.2.0+npu，本报告全部数据即在该栈采集）上，端到端吞吐达到 **8×A100 同档的 1.5 倍**。
 
-**GPU 对照实现**：`<待填：GPU 代码实现地址>`（A100 侧数值取自该实现；有地址后本节补链接与 commit。）
+**GPU 对照实现**：`https://github.com/facebookresearch/dlrm/tree/main/torchrec_dlrm` —— A100 侧数值取自该实现的 Preliminary Training Results（8×A100 40GB、Criteo 1TB、dot 交互、同每卡本地 batch）。原型入口 `dlrm_s_pytorch.py`，torchrec 版入口 `torchrec_dlrm/dlrm_main.py`。
 
 | 档 | A100 锚（ms / sps） | **1.5× 目标** | 目标 samples/s | 目标 batch/s | 当前实测 | 达成率 | 缺口 |
 |---|---:|---:|---:|---:|---:|---:|---:|

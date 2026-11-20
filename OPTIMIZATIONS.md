@@ -12,7 +12,7 @@
 
 ## 目标（2026-11-20 更新）
 
-在 **昇腾 950DT ×8 die + TorchRec V2**（`torch_rec_v2` 26.1.0 + `torchrec` 1.2.0+npu）上，端到端吞吐达 **8×A100 同档的 1.5 倍**。**GPU 对照实现**：`<待填：GPU 代码实现地址>`。
+在 **昇腾 950DT ×8 die + TorchRec V2**（`torch_rec_v2` 26.1.0 + `torchrec` 1.2.0+npu）上，端到端吞吐达 **8×A100 同档的 1.5 倍**。**GPU 对照实现**：`https://github.com/facebookresearch/dlrm/tree/main/torchrec_dlrm`。
 
 | 档 | 1.5× 目标 | 目标 samples/s | 目标 batch/s | 当前 | 达成率 | 缺口 |
 |---|---:|---:|---:|---:|---:|---:|
