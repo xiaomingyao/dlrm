@@ -1,0 +1,1126 @@
+{
+ "source": "profiling/{A2,A4}_ec_dedup/kernel_details.csv + step_trace_time.csv",
+ "method": "kernel 名 + 步内顺序切段；段内区间并集；窗口=Stage",
+ "tiers": {
+  "A2": {
+   "tier": "A2",
+   "global_bs": 16384,
+   "steps": 20,
+   "first_step": "3",
+   "last_step": "22",
+   "wall_ms": 21.51315,
+   "computing": 2.6853619,
+   "comm_no_ovl": 4.07627225,
+   "free": 14.751504500000012,
+   "bands": {
+    "S1": {
+     "name": "S1 稀疏前向",
+     "span": 12.626,
+     "busy": 4.0981625,
+     "comm": 3.4460375,
+     "compute": 0.6521249999999998,
+     "gap": 8.5278375,
+     "cats": [
+      {
+       "cat": "① 通信 · id 交换",
+       "ms": 3.4460375,
+       "ops": [
+        {
+         "name": "hcom_alltoall_AicpuKernel",
+         "ms": 1.7519125,
+         "calls": 1
+        },
+        {
+         "name": "hcom_alltoallv_AicpuKernel",
+         "ms": 1.6937375,
+         "calls": 3
+        },
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 0.751525,
+         "calls": 4
+        }
+       ]
+      },
+      {
+       "cat": "② id 去重 / 长度计算",
+       "ms": 0.4452625,
+       "ops": [
+        {
+         "name": "aclnnUnique2_SortAiCoreForDavid_Sort",
+         "ms": 0.13917500000000002,
+         "calls": 2
+        },
+        {
+         "name": "block_bucketsize_sparse_features",
+         "ms": 0.05825,
+         "calls": 1
+        },
+        {
+         "name": "aclnnUnique2_CumsumAiCore_Cumsum",
+         "ms": 0.0375625,
+         "calls": 2
+        },
+        {
+         "name": "aclnnReduceSum_ReduceSumOpAiCore_ReduceSum",
+         "ms": 0.02305,
+         "calls": 5
+        },
+        {
+         "name": "aclnnUnique2_UniqueConsecutiveAiCore_UniqueConsecutive",
+         "ms": 0.0201,
+         "calls": 2
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.015625,
+         "calls": 6
+        },
+        {
+         "name": "aclnnUnique2_ScatterElements_ScatterElementsV2",
+         "ms": 0.015075,
+         "calls": 2
+        },
+        {
+         "name": "aclnnIndex_IndexAiCore_Index",
+         "ms": 0.012675,
+         "calls": 2
+        },
+        {
+         "name": "_ZN7dyn_emb13maskselect_opEPbPlS1_S1_S1_liiiiiii",
+         "ms": 0.00945,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.0092625,
+         "calls": 4
+        },
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.0089125,
+         "calls": 2
+        },
+        {
+         "name": "get_new_length_and_offsets_op",
+         "ms": 0.008762500000000001,
+         "calls": 1
+        },
+        {
+         "name": "_ZN7dyn_emb19maskselect_index_opEPbPlS1_S1_liiiiiii",
+         "ms": 0.008675,
+         "calls": 1
+        },
+        {
+         "name": "aclnnIndexPutImpl_IndexPutV2_IndexPutV2",
+         "ms": 0.0086,
+         "calls": 1
+        },
+        {
+         "name": "aclnnReduceSum_CastAiCore_Cast",
+         "ms": 0.008425,
+         "calls": 4
+        },
+        {
+         "name": "aclnnNonzeroV2_NonzeroAiCore_NonZero",
+         "ms": 0.007975,
+         "calls": 2
+        },
+        {
+         "name": "aclnnUnique2_AdjacentDifference_AdjacentDifference",
+         "ms": 0.0077125,
+         "calls": 2
+        },
+        {
+         "name": "aclnnAdds_AddAiCore_Add",
+         "ms": 0.0075625,
+         "calls": 2
+        },
+        {
+         "name": "aclnnCumsum_CumsumAiCore_Cumsum",
+         "ms": 0.00755,
+         "calls": 1
+        },
+        {
+         "name": "get_table_range_op",
+         "ms": 0.0048875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnInplaceCopy_TransposeAiCore_Transpose",
+         "ms": 0.00465,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_TensorMoveAiCore_TensorMove",
+         "ms": 0.004525,
+         "calls": 1
+        },
+        {
+         "name": "aclnnMuls_MulAiCore_Mul",
+         "ms": 0.0043375,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_BroadcastToAiCore_BroadcastTo",
+         "ms": 0.0038625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnStack_PackAiCore_Pack",
+         "ms": 0.00365,
+         "calls": 1
+        },
+        {
+         "name": "aclnnLogicalNot_LogicalNotAiCore_LogicalNot",
+         "ms": 0.0028625,
+         "calls": 1
+        },
+        {
+         "name": "device_timestamp",
+         "ms": 0.0021874999999999998,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "③ HKV 查表 / 建表",
+       "ms": 0.1961375,
+       "ops": [
+        {
+         "name": "_ZN3npu3hkv23insert_or_assign_kernelIlfmLi0EEEvPvPimjjS2_S2_S2_mmjjmmmi",
+         "ms": 0.08095,
+         "calls": 1
+        },
+        {
+         "name": "aclnnIndexSelect_GatherV2AiCore_GatherV2",
+         "ms": 0.0316,
+         "calls": 2
+        },
+        {
+         "name": "_ZN3npu3hkv34find_and_update_kernel_with_filterIlfmLi0EEEvPNS0_6BucketIT_T0_T1_EEmjjPS3_PPS4_PS5_Pbmbmjmm",
+         "ms": 0.0256625,
+         "calls": 1
+        },
+        {
+         "name": "load_from_pointer",
+         "ms": 0.0231375,
+         "calls": 1
+        },
+        {
+         "name": "_Z28initialize_with_index_kernelIflN7dyn_emb25UniformEmbeddingGeneratorEEvlllPT_PKT0_NT1_4ArgsE",
+         "ms": 0.0231125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnGather_GatherV2AiCore_GatherV2",
+         "ms": 0.011675,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "④ 其它",
+       "ms": 0.0107625,
+       "ops": [
+        {
+         "name": "aclnnInplaceCopy_ViewCopyAiCore_ViewCopy",
+         "ms": 0.0107625,
+         "calls": 2
+        }
+       ]
+      }
+     ]
+    },
+    "S2": {
+     "name": "S2 稠密前向",
+     "span": 0.60955,
+     "busy": 0.5728624999999999,
+     "comm": 0.0268875,
+     "compute": 0.545975,
+     "gap": 0.036687500000000095,
+     "cats": [
+      {
+       "cat": "① 矩阵乘（MLP + 交互）",
+       "ms": 0.4876625,
+       "ops": [
+        {
+         "name": "aclnnAddmm_MatMulV3Common_MatMulV3",
+         "ms": 0.453075,
+         "calls": 8
+        },
+        {
+         "name": "aclnnBatchMatMul_BatchMatMulV3Nd_BatchMatMulV3",
+         "ms": 0.0345875,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "③ 通信发射",
+       "ms": 0.268875,
+       "ops": [
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 0.268875,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② 激活 / 拼接 / 整形",
+       "ms": 0.07775,
+       "ops": [
+        {
+         "name": "aclnnRelu_Relu_Relu",
+         "ms": 0.0264875,
+         "calls": 7
+        },
+        {
+         "name": "aclnnCat_ConcatD_ConcatD",
+         "ms": 0.0194125,
+         "calls": 2
+        },
+        {
+         "name": "aclnnTriu_Triu_Triu",
+         "ms": 0.0089875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnSWhere_SelectV2AiCore_SelectV2",
+         "ms": 0.006325,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.0063125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.0053875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.00495,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S3": {
+     "name": "S3 损失",
+     "span": 0.012425,
+     "busy": 0.021599999999999998,
+     "comm": 0.014025000000000001,
+     "compute": 0.007574999999999997,
+     "gap": -0.009174999999999997,
+     "cats": [
+      {
+       "cat": "BCE 前向",
+       "ms": 0.021599999999999998,
+       "ops": [
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 0.2805,
+         "calls": 1
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogits_ReduceMeanAiCore_ReduceMean",
+         "ms": 0.0032875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogits_SigmoidCrossEntropyWithLogitsV2_SigmoidCrossEntropyWithLogitsV2",
+         "ms": 0.002875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.001675,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S4": {
+     "name": "S4 反向",
+     "span": 5.5021125,
+     "busy": 2.001475,
+     "comm": 0.969125,
+     "compute": 1.03235,
+     "gap": 3.5006375,
+     "cats": [
+      {
+       "cat": "① 梯度计算（MLP / 交互 / 规约）",
+       "ms": 1.2633875,
+       "ops": [
+        {
+         "name": "aclnnMm_MatMulV3Common_MatMulV3",
+         "ms": 0.9222875,
+         "calls": 14
+        },
+        {
+         "name": "aclnnAdd_AddAiCore_Add",
+         "ms": 0.0740625,
+         "calls": 2
+        },
+        {
+         "name": "aclnnReduceSum_ReduceSumOpAiCore_ReduceSum",
+         "ms": 0.0490625,
+         "calls": 8
+        },
+        {
+         "name": "aclnnBatchMatMul_BatchMatMulV3Nd_BatchMatMulV3",
+         "ms": 0.043875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnMuls_MulAiCore_Mul",
+         "ms": 0.0403625,
+         "calls": 16
+        },
+        {
+         "name": "aclnnThresholdBackward_ReluGrad_ReluGrad",
+         "ms": 0.034975,
+         "calls": 7
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.0129625,
+         "calls": 3
+        },
+        {
+         "name": "aclnnDivs_RealDivAiCore_RealDiv",
+         "ms": 0.012075,
+         "calls": 1
+        },
+        {
+         "name": "aclnnScatterAdd_ScatterAddAiCore_ScatterAdd",
+         "ms": 0.01205,
+         "calls": 1
+        },
+        {
+         "name": "aclnnCat_TensorMoveAiCore_TensorMove",
+         "ms": 0.0115625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_SliceAiCore_Slice",
+         "ms": 0.010775,
+         "calls": 1
+        },
+        {
+         "name": "_ZN3npu3hkv27find_ptr_with_digest_kernelIlfmEEvPNS0_6BucketIT_T0_T1_EEmmjjPS3_PPS4_PS5_Pbmmjmm",
+         "ms": 0.0107125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnSWhere_AsStridedAiCore_AsStrided",
+         "ms": 0.0075625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnMm_MulAiCore_Mul",
+         "ms": 0.0060625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnSWhere_SelectV2AiCore_SelectV2",
+         "ms": 0.0056375,
+         "calls": 1
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogitsBackward_OnesLikeAiCore_OnesLike",
+         "ms": 0.004275,
+         "calls": 2
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogitsBackward_SigmoidCrossEntropyWithLogitsGradV2_SigmoidCrossEntropyWithLogitsGradV2",
+         "ms": 0.0042125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.0017,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "③ 梯度通信",
+       "ms": 0.969125,
+       "ops": [
+        {
+         "name": "hcom_allReduce_AicpuKernel",
+         "ms": 0.6429125,
+         "calls": 1
+        },
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 0.4409875,
+         "calls": 1.85
+        },
+        {
+         "name": "hcom_alltoallv_AicpuKernel",
+         "ms": 0.1255,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② 稀疏梯度累加",
+       "ms": 0.10685,
+       "ops": [
+        {
+         "name": "aclnnIndexAdd_InplaceIndexAddAiCore_InplaceIndexAdd",
+         "ms": 0.10685,
+         "calls": 2
+        }
+       ]
+      }
+     ]
+    },
+    "S5": {
+     "name": "S5 优化器",
+     "span": 0.3585125,
+     "busy": 0.0710625,
+     "comm": 0.0,
+     "compute": 0.0710625,
+     "gap": 0.28745,
+     "cats": [
+      {
+       "cat": "① 稀疏 HKV 更新",
+       "ms": 0.04125,
+       "ops": [
+        {
+         "name": "rowwise_adagrad_update_float2",
+         "ms": 0.04125,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② 稠密参数更新",
+       "ms": 0.0298125,
+       "ops": [
+        {
+         "name": "aclnnForeachAddListV2_ForeachAddListV2_ForeachAddList",
+         "ms": 0.0298125,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S6": {
+     "name": "S6 指标",
+     "span": 0.08096249999999999,
+     "busy": 0.017087500000000002,
+     "comm": 0.0,
+     "compute": 0.017087500000000002,
+     "gap": 0.06387499999999999,
+     "cats": [
+      {
+       "cat": "指标 / 收尾",
+       "ms": 0.017087500000000002,
+       "ops": [
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.0046625,
+         "calls": 2
+        },
+        {
+         "name": "aclnnMean_ReduceMeanAiCore_ReduceMean",
+         "ms": 0.0033625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnGtScalar_GreaterAiCore_Greater",
+         "ms": 0.0030625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnEqTensor_EqualAiCore_Equal",
+         "ms": 0.003025,
+         "calls": 1
+        },
+        {
+         "name": "aclnnSigmoid_SigmoidAiCore_Sigmoid",
+         "ms": 0.0029749999999999998,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "band_order": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6"
+   ]
+  },
+  "A4": {
+   "tier": "A4",
+   "global_bs": 131072,
+   "steps": 20,
+   "first_step": "3",
+   "last_step": "22",
+   "wall_ms": 73.7401125,
+   "computing": 15.159826650000003,
+   "comm_no_ovl": 18.490865550000002,
+   "free": 40.089440750000044,
+   "bands": {
+    "S1": {
+     "name": "S1 稀疏前向",
+     "span": 39.9376625,
+     "busy": 19.631225,
+     "comm": 18.3200625,
+     "compute": 1.3111625000000018,
+     "gap": 20.3064375,
+     "cats": [
+      {
+       "cat": "① 通信 · id 交换",
+       "ms": 18.3200625,
+       "ops": [
+        {
+         "name": "hcom_alltoall_AicpuKernel",
+         "ms": 9.512,
+         "calls": 1
+        },
+        {
+         "name": "hcom_alltoallv_AicpuKernel",
+         "ms": 8.807175,
+         "calls": 3
+        },
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 1.1124125,
+         "calls": 5.5
+        }
+       ]
+      },
+      {
+       "cat": "③ HKV 查表 / 建表",
+       "ms": 0.654575,
+       "ops": [
+        {
+         "name": "_ZN3npu3hkv23insert_or_assign_kernelIlfmLi0EEEvPvPimjjS2_S2_S2_mmjjmmmi",
+         "ms": 0.20345,
+         "calls": 1
+        },
+        {
+         "name": "aclnnIndexSelect_GatherV2AiCore_GatherV2",
+         "ms": 0.18008749999999998,
+         "calls": 2
+        },
+        {
+         "name": "load_from_pointer",
+         "ms": 0.1090875,
+         "calls": 1
+        },
+        {
+         "name": "_Z28initialize_with_index_kernelIflN7dyn_emb25UniformEmbeddingGeneratorEEvlllPT_PKT0_NT1_4ArgsE",
+         "ms": 0.0961125,
+         "calls": 1
+        },
+        {
+         "name": "_ZN3npu3hkv34find_and_update_kernel_with_filterIlfmLi0EEEvPNS0_6BucketIT_T0_T1_EEmjjPS3_PPS4_PS5_Pbmbmjmm",
+         "ms": 0.03415,
+         "calls": 1
+        },
+        {
+         "name": "aclnnGather_GatherV2AiCore_GatherV2",
+         "ms": 0.0316875,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② id 去重 / 长度计算",
+       "ms": 0.64125,
+       "ops": [
+        {
+         "name": "aclnnUnique2_SortAiCoreForDavid_Sort",
+         "ms": 0.2460625,
+         "calls": 2
+        },
+        {
+         "name": "block_bucketsize_sparse_features",
+         "ms": 0.053837499999999996,
+         "calls": 1
+        },
+        {
+         "name": "aclnnUnique2_CumsumAiCore_Cumsum",
+         "ms": 0.035949999999999996,
+         "calls": 2
+        },
+        {
+         "name": "aclnnUnique2_ScatterElements_ScatterElementsV2",
+         "ms": 0.032025,
+         "calls": 2
+        },
+        {
+         "name": "aclnnReduceSum_ReduceSumOpAiCore_ReduceSum",
+         "ms": 0.03015,
+         "calls": 5
+        },
+        {
+         "name": "aclnnUnique2_UniqueConsecutiveAiCore_UniqueConsecutive",
+         "ms": 0.0282875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnInplaceCopy_TensorMoveAiCore_TensorMove",
+         "ms": 0.0273875,
+         "calls": 7
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.0197,
+         "calls": 6
+        },
+        {
+         "name": "aclnnIndex_IndexAiCore_Index",
+         "ms": 0.017725,
+         "calls": 2
+        },
+        {
+         "name": "aclnnNonzeroV2_NonzeroAiCore_NonZero",
+         "ms": 0.0172375,
+         "calls": 2
+        },
+        {
+         "name": "aclnnIndexPutImpl_IndexPutV2_IndexPutV2",
+         "ms": 0.0143875,
+         "calls": 1
+        },
+        {
+         "name": "_ZN7dyn_emb13maskselect_opEPbPlS1_S1_S1_liiiiiii",
+         "ms": 0.0119125,
+         "calls": 1
+        },
+        {
+         "name": "get_new_length_and_offsets_op",
+         "ms": 0.011175,
+         "calls": 1
+        },
+        {
+         "name": "_ZN7dyn_emb19maskselect_index_opEPbPlS1_S1_liiiiiii",
+         "ms": 0.011,
+         "calls": 1
+        },
+        {
+         "name": "aclnnUnique2_AdjacentDifference_AdjacentDifference",
+         "ms": 0.010875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnCumsum_CumsumAiCore_Cumsum",
+         "ms": 0.010725,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.01,
+         "calls": 4
+        },
+        {
+         "name": "aclnnReduceSum_CastAiCore_Cast",
+         "ms": 0.008625,
+         "calls": 4
+        },
+        {
+         "name": "aclnnAdds_AddAiCore_Add",
+         "ms": 0.0083,
+         "calls": 2
+        },
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.0081625,
+         "calls": 2
+        },
+        {
+         "name": "get_table_range_op",
+         "ms": 0.0051875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnInplaceCopy_TransposeAiCore_Transpose",
+         "ms": 0.0046,
+         "calls": 1
+        },
+        {
+         "name": "aclnnMuls_MulAiCore_Mul",
+         "ms": 0.0045249999999999995,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_BroadcastToAiCore_BroadcastTo",
+         "ms": 0.004475,
+         "calls": 1
+        },
+        {
+         "name": "aclnnStack_PackAiCore_Pack",
+         "ms": 0.003575,
+         "calls": 1
+        },
+        {
+         "name": "aclnnLogicalNot_LogicalNotAiCore_LogicalNot",
+         "ms": 0.0031,
+         "calls": 1
+        },
+        {
+         "name": "device_timestamp",
+         "ms": 0.0023625,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "④ 其它",
+       "ms": 0.015375,
+       "ops": [
+        {
+         "name": "aclnnInplaceCopy_ViewCopyAiCore_ViewCopy",
+         "ms": 0.015375,
+         "calls": 2
+        }
+       ]
+      }
+     ]
+    },
+    "S2": {
+     "name": "S2 稠密前向",
+     "span": 4.094125,
+     "busy": 4.0918125,
+     "comm": 0.12025,
+     "compute": 3.9715624999999997,
+     "gap": 0.0023125000000003837,
+     "cats": [
+      {
+       "cat": "① 矩阵乘（MLP + 交互）",
+       "ms": 3.6316625,
+       "ops": [
+        {
+         "name": "aclnnAddmm_MatMulV3Common_MatMulV3",
+         "ms": 3.3868,
+         "calls": 8
+        },
+        {
+         "name": "aclnnBatchMatMul_BatchMatMulV3Nd_BatchMatMulV3",
+         "ms": 0.24486249999999998,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "③ 通信发射",
+       "ms": 0.481,
+       "ops": [
+        {
+         "name": "HcclLaunchAicpuKernel",
+         "ms": 0.481,
+         "calls": 2
+        }
+       ]
+      },
+      {
+       "cat": "② 激活 / 拼接 / 整形",
+       "ms": 0.46042500000000003,
+       "ops": [
+        {
+         "name": "aclnnCat_ConcatD_ConcatD",
+         "ms": 0.188325,
+         "calls": 2
+        },
+        {
+         "name": "aclnnRelu_Relu_Relu",
+         "ms": 0.13713750000000002,
+         "calls": 7
+        },
+        {
+         "name": "aclnnSWhere_SelectV2AiCore_SelectV2",
+         "ms": 0.05445,
+         "calls": 1
+        },
+        {
+         "name": "aclnnTriu_Triu_Triu",
+         "ms": 0.034800000000000005,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.0163125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.0163125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.0132125,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S3": {
+     "name": "S3 损失",
+     "span": 0.0122625,
+     "busy": 0.01225,
+     "comm": 0.0,
+     "compute": 0.01225,
+     "gap": 1.2500000000000358e-05,
+     "cats": [
+      {
+       "cat": "BCE 前向",
+       "ms": 0.01225,
+       "ops": [
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogits_ReduceMeanAiCore_ReduceMean",
+         "ms": 0.0058875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogits_SigmoidCrossEntropyWithLogitsV2_SigmoidCrossEntropyWithLogitsV2",
+         "ms": 0.003925,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.0024749999999999998,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S4": {
+     "name": "S4 反向",
+     "span": 23.2349375,
+     "busy": 9.670275,
+     "comm": 0.5039875,
+     "compute": 9.1662875,
+     "gap": 13.5646625,
+     "cats": [
+      {
+       "cat": "① 梯度计算（MLP / 交互 / 规约）",
+       "ms": 8.54095,
+       "ops": [
+        {
+         "name": "aclnnMm_MatMulV3Common_MatMulV3",
+         "ms": 6.87465,
+         "calls": 14
+        },
+        {
+         "name": "aclnnAdd_AddAiCore_Add",
+         "ms": 0.5092875,
+         "calls": 2
+        },
+        {
+         "name": "aclnnBatchMatMul_BatchMatMulV3Nd_BatchMatMulV3",
+         "ms": 0.338575,
+         "calls": 2
+        },
+        {
+         "name": "aclnnThresholdBackward_ReluGrad_ReluGrad",
+         "ms": 0.1906625,
+         "calls": 7
+        },
+        {
+         "name": "aclnnCat_TensorMoveAiCore_TensorMove",
+         "ms": 0.14705,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_SliceAiCore_Slice",
+         "ms": 0.13441250000000002,
+         "calls": 1
+        },
+        {
+         "name": "aclnnReduceSum_ReduceSumOpAiCore_ReduceSum",
+         "ms": 0.0976125,
+         "calls": 8
+        },
+        {
+         "name": "aclnnMuls_MulAiCore_Mul",
+         "ms": 0.047275,
+         "calls": 16
+        },
+        {
+         "name": "aclnnDivs_RealDivAiCore_RealDiv",
+         "ms": 0.0354875,
+         "calls": 1
+        },
+        {
+         "name": "aclnnScatterAdd_ScatterAddAiCore_ScatterAdd",
+         "ms": 0.0334,
+         "calls": 1
+        },
+        {
+         "name": "aclnnSWhere_AsStridedAiCore_AsStrided",
+         "ms": 0.032475000000000004,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceZero_ZerosLikeAiCore_ZerosLike",
+         "ms": 0.0301625,
+         "calls": 3
+        },
+        {
+         "name": "aclnnSWhere_SelectV2AiCore_SelectV2",
+         "ms": 0.025675,
+         "calls": 1
+        },
+        {
+         "name": "_ZN3npu3hkv27find_ptr_with_digest_kernelIlfmEEvPNS0_6BucketIT_T0_T1_EEmmjjPS3_PPS4_PS5_Pbmmjmm",
+         "ms": 0.0200125,
+         "calls": 1
+        },
+        {
+         "name": "aclnnMm_MulAiCore_Mul",
+         "ms": 0.0128625,
+         "calls": 1
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogitsBackward_OnesLikeAiCore_OnesLike",
+         "ms": 0.0048125,
+         "calls": 2
+        },
+        {
+         "name": "aclnnBinaryCrossEntropyWithLogitsBackward_SigmoidCrossEntropyWithLogitsGradV2_SigmoidCrossEntropyWithLogitsGradV2",
+         "ms": 0.0048000000000000004,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+         "ms": 0.002525,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② 稀疏梯度累加",
+       "ms": 0.9576,
+       "ops": [
+        {
+         "name": "aclnnIndexAdd_InplaceIndexAddAiCore_InplaceIndexAdd",
+         "ms": 0.9576,
+         "calls": 2
+        }
+       ]
+      },
+      {
+       "cat": "③ 梯度通信",
+       "ms": 0.5039875,
+       "ops": [
+        {
+         "name": "hcom_allReduce_AicpuKernel",
+         "ms": 0.33235000000000003,
+         "calls": 1
+        },
+        {
+         "name": "hcom_alltoallv_AicpuKernel",
+         "ms": 0.1716375,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S5": {
+     "name": "S5 优化器",
+     "span": 0.41375,
+     "busy": 0.2228625,
+     "comm": 0.0,
+     "compute": 0.2228625,
+     "gap": 0.19088750000000002,
+     "cats": [
+      {
+       "cat": "① 稀疏 HKV 更新",
+       "ms": 0.1930125,
+       "ops": [
+        {
+         "name": "rowwise_adagrad_update_float2",
+         "ms": 0.1930125,
+         "calls": 1
+        }
+       ]
+      },
+      {
+       "cat": "② 稠密参数更新",
+       "ms": 0.029849999999999998,
+       "ops": [
+        {
+         "name": "aclnnForeachAddListV2_ForeachAddListV2_ForeachAddList",
+         "ms": 0.029849999999999998,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    },
+    "S6": {
+     "name": "S6 指标",
+     "span": 0.095025,
+     "busy": 0.0212625,
+     "comm": 0.0,
+     "compute": 0.0212625,
+     "gap": 0.0737625,
+     "cats": [
+      {
+       "cat": "指标 / 收尾",
+       "ms": 0.0212625,
+       "ops": [
+        {
+         "name": "aclnnMean_ReduceMeanAiCore_ReduceMean",
+         "ms": 0.006,
+         "calls": 1
+        },
+        {
+         "name": "aclnnInplaceCopy_CastAiCore_Cast",
+         "ms": 0.00515,
+         "calls": 2
+        },
+        {
+         "name": "aclnnSigmoid_SigmoidAiCore_Sigmoid",
+         "ms": 0.0035375,
+         "calls": 1
+        },
+        {
+         "name": "aclnnGtScalar_GreaterAiCore_Greater",
+         "ms": 0.0035,
+         "calls": 1
+        },
+        {
+         "name": "aclnnEqTensor_EqualAiCore_Equal",
+         "ms": 0.003075,
+         "calls": 1
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "band_order": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6"
+   ]
+  }
+ }
+}
