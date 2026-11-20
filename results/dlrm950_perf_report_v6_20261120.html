@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DLRM 昇腾 950DT（HKV / TBE）vs 8×A100 —— 性能对比 · 诊断 · 优化（v6 · 目标 1.5× A100 · 含吞吐列）</title>
+<style>
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;margin:0;padding:28px 32px 48px;background:#f6f7f9;color:#1f2329;line-height:1.62;font-size:14px}
+  h1{font-size:25px;margin:0 0 4px;color:#c00000}
+  .sub{color:#646a73;font-size:12.5px;margin-bottom:20px;line-height:1.7}
+  h2{font-size:17px;margin:32px 0 10px;padding-left:9px;border-left:4px solid #c00000}
+  h3{font-size:14px;margin:18px 0 6px}
+  table{border-collapse:collapse;width:100%;background:#fff;font-size:12.5px;box-shadow:0 1px 2px rgba(0,0,0,.05);margin:8px 0 4px;table-layout:fixed}
+  th,td{border:1px solid #e5e6eb;padding:6px 8px;text-align:left;word-wrap:break-word;overflow-wrap:anywhere}
+  th{background:#f2f3f5;font-weight:600}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.hi td{background:#fff8f8}
+  tr.tot td{background:#f2f3f5;font-weight:600}
+  .ok{color:#0e8a3e;font-weight:600}.no{color:#c00000;font-weight:600}.warn{color:#b26a00;font-weight:600}
+  .note{font-size:12px;color:#646a73;margin:4px 0 0}
+  .cards{display:flex;gap:10px;margin:12px 0 6px;flex-wrap:wrap}
+  .card{flex:1 1 150px;min-width:150px;background:#fff;border:1px solid #e5e6eb;border-radius:6px;padding:10px 12px}
+  .card .k{font-size:11.5px;color:#646a73}.card .v{font-size:20px;font-weight:700;margin:2px 0}.card .u{font-size:11.5px;color:#8a8f99}
+  .bar{display:flex;height:26px;border-radius:4px;overflow:hidden;background:#eceef1;margin:6px 0 2px;font-size:11px;color:#fff}
+  .bar span{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden}
+  .b1{background:#c00000}.b2{background:#e6772e}.b3{background:#3b7dd8}.b4{background:#8a8f99}.b5{background:#0e8a3e}
+  .legend{font-size:11.5px;color:#646a73;margin:2px 0 10px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 4px 0 10px}
+  table.tight{font-size:12px}
+  table.tight th,table.tight td{padding:5px 4px}
+  code{background:#f2f3f5;padding:1px 4px;border-radius:3px;font-size:11.5px}
+  ul{margin:6px 0 6px 18px;padding:0}li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:#f2f3f5;color:#646a73}
+
+  strong{font-weight:700}
+  td[style*="right"]{white-space:nowrap}
+  table{table-layout:auto}
+  table.narrow{width:auto;min-width:52%}
+  td[style*="right"],th[style*="right"]{font-variant-numeric:tabular-nums}
+  .vtag{font-size:12.5px;color:#646a73;margin:2px 0 6px}
+  .toc{font-size:12.5px;color:#646a73;background:#fff;border:1px solid #e5e6eb;border-radius:6px;padding:10px 14px;margin:12px 0 0}
+  .toc ul{margin:4px 0 0 16px}
+  .toc a{color:#37527a;text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<h1 id="dlrm-950dt-hkv-tbe-vs-8a100">DLRM 在昇腾 950DT 上的性能报告：HKV / TBE 双实现 vs 8×A100</h1><div class="vtag"><span class="tag">v6 · 2026-11-20</span> 目标改为 <b>1.5× A100</b>（复核环境 950DT ×8 + TorchRec V2），新增 §1.1；v5 的全表 <b>samples/s</b> / <b>batch/s</b> 保留。实测数字未改。</div>
+<p>本报告合并「优化报告 v1/v2」与「性能诊断报告」，并按三方重写对比章：950 侧两个实现（HKV 动态表 / RecSDK TBE 静态表）与 8×A100，共 11 章。</p>
+<blockquote>
+<p><strong>v6 变更（2026-11-20）</strong>：目标口径由「2× A100」改为 <strong>1.5× A100</strong>，复核环境明确为 <strong>昇腾 950DT ×8 + TorchRec V2</strong>；新增 §1.1（目标表 + 复核判据 + GPU 对照实现地址），§1 判断行、§3.4 差距表、§8 结论按 1.5× 重读。<strong>实测数字一个未改</strong>，2× 目标作为阶段二参考保留。</p>
+<p><strong>v5 变更（2026-11-20）</strong>：全表补 <strong>吞吐 samples/s</strong>（本就有的列按原值保留）与 <strong>batch/s</strong>（每秒步数）两列，新增 §4.1 收益吞吐口径；原始 ms、百分比、结论一律未改。换算关系：<code>samples/s = global batch ÷ 时延</code>、<code>batch/s = 1000 ÷ 时延(ms)</code>。</p>
+</blockquote>
+<ul>
+<li><strong>硬件</strong>：8 die Ascend950DT（单 die HBM 96 GiB，UB 互联）· CANN 9.1.0 · 驱动/固件 25.1.rc2 / 7.0.9.100.203</li>
+<li><strong>模型</strong>：bottom MLP 13→512→256→128 + 27×27 dot 交互 + top MLP 857→1024→1024→512→256→1 + 26 张稀疏表（HKV 动态表）</li>
+<li><strong>数据</strong>：Criteo 1TB 切片（day0–6；训练 22,184,476 行 / 测试 2,295,467 行），MLPerf 词表 268,435,456 行</li>
+<li><strong>对照</strong>：8×A100 40GB（同数据、同 dot 交互、同每卡本地 batch；A4 档 A100 侧为 DCN v2）</li>
+</ul>
+<h2 id="1">1. 结论摘要</h2>
+
+<div class="cards">
+  <div class="card"><div class="k">目标（1.5× A100）</div><div class="v no">2/3 达成</div><div class="u">A4 已达标；A1 缺 0.77 ms、A2 缺 4.33 ms</div></div>
+  <div class="card"><div class="k">A1 档（global 2,048）</div><div class="v">89.5%</div><div class="u">7.44 ms / 275,000 sps · 目标 ≤6.67 ms（307,200 sps）</div></div>
+  <div class="card"><div class="k">A2 档（global 16,384）</div><div class="v">73.1%</div><div class="u">16.13 ms / 1,015,600 sps · 目标 ≤11.80 ms（1,388,544 sps）</div></div>
+  <div class="card"><div class="k">A4 档（global 131,072）</div><div class="v ok">117.9%</div><div class="u">62.30 ms / 2,104,000 sps · 目标 ≤73.42 ms（余 11.12 ms）¹</div></div>
+  <div class="card"><div class="k">950-TBE（RecSDK，DCN）</div><div class="v no">7.0%</div><div class="u">62,690 sps vs A100-DCN 901,120 · 3.83 batch/s</div></div>
+  <div class="card"><div class="k">算子效率</div><div class="v ok">91.3%</div><div class="u">MatMul cube_utilization</div></div>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>档</th>
+<th style="text-align: right;">950 sps</th>
+<th style="text-align: right;"><strong>950 batch/s</strong></th>
+<th style="text-align: right;">A100 sps</th>
+<th style="text-align: right;"><strong>A100 batch/s</strong></th>
+<th style="text-align: right;">对 A100</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1（global 2,048）</td>
+<td style="text-align: right;">275,000</td>
+<td style="text-align: right;"><strong>134.41</strong></td>
+<td style="text-align: right;">204,800</td>
+<td style="text-align: right;">100.00</td>
+<td style="text-align: right;"><strong>134.3%</strong></td>
+</tr>
+<tr>
+<td>A2（global 16,384）</td>
+<td style="text-align: right;">1,015,600</td>
+<td style="text-align: right;"><strong>62.00</strong></td>
+<td style="text-align: right;">925,696</td>
+<td style="text-align: right;">56.50</td>
+<td style="text-align: right;"><strong>109.7%</strong></td>
+</tr>
+<tr>
+<td>A4¹（global 131,072）</td>
+<td style="text-align: right;">2,104,000</td>
+<td style="text-align: right;"><strong>16.05</strong></td>
+<td style="text-align: right;">1,190,128</td>
+<td style="text-align: right;">9.08</td>
+<td style="text-align: right;"><strong>176.8%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>950-TBE（RecSDK，DCN v2 / Adagrad，未优化基线）</strong>：2,048/16,384 档 62,690 sps = 同配置 A100（901,120）的 <strong>7.0%</strong>；256/2,048 档 7,356 sps。</p>
+<p>¹ A100-A4 用 DCN v2，本实现只有 dot（算力需求更低），该档非同模型对比，仅作规模参考。</p>
+<p>sps 沿用账本对外取整值（275,000 / 1,015,600 / 2,104,000）；按其 ms 精算为 275,269 / 1,015,747 / 2,103,884，差 &lt;0.03%。<code>batch/s</code> 为 1000 ÷ 端到端 ms，A100 侧同法换算（2048/10.00 ms→100.00、16384/17.70→56.50、131072/110.13→9.08）。</p>
+<table>
+<thead>
+<tr>
+<th>判断</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已超过同档 A100</td>
+<td>A1 134.3%、A2 109.7%（端到端，含 host 取数），同数据、同 8 卡、同 dot、同每卡本地 batch</td>
+</tr>
+<tr>
+<td>大 batch 是 950 的主场</td>
+<td>固定开销 8.33 ms + 0.361 µs/样本；16,384→131,072 每样本成本 0.897→0.432 µs，吞吐 2.08×</td>
+</tr>
+<tr>
+<td><strong>1.5× 目标：A4 已达成，A1/A2 未达</strong></td>
+<td>目标 A1 ≤6.67 / A2 ≤11.80 / A4 ≤73.42 ms；当前 7.44 / 16.13 / 62.30 ⇒ A4 <strong>117.9%</strong>、A1 缺 <strong>0.77 ms</strong>、A2 缺 <strong>4.33 ms</strong>（口径与判据见 §1.1）</td>
+</tr>
+<tr>
+<td>瓶颈不是算力而是「等」</td>
+<td>Cube 在矩阵乘内忙 91.3%，但矩阵乘只占步时 6.8%/13.9%；wait+空隙 64%/44%，通信 25%</td>
+</tr>
+<tr>
+<td>950-TBE 比同机 HKV 慢 16–37×</td>
+<td>TBE 每步固定开销 255–285 ms，与 batch、表规模无关（1 die 亦复现 185 ms）；HKV 批量化查表后 15 ms/步（§3.5）</td>
+</tr>
+<tr>
+<td>整机占用天然偏低</td>
+<td>训练对齐采样 AICore 4.84%（峰值 17%），与理论占空 6.8%×91.3%≈6.2% 一致</td>
+</tr>
+</tbody>
+</table>
+<h3 id="11-2026-11-20">1.1 目标（2026-11-20 更新）与复核判据</h3>
+<p><strong>项目目标</strong>：在 <strong>昇腾 950DT ×8 die + TorchRec V2 栈</strong>（<code>torch_rec_v2</code> 26.1.0 + <code>torchrec</code> 1.2.0+npu，本报告全部数据即在该栈采集）上，端到端吞吐达到 <strong>8×A100 同档的 1.5 倍</strong>。</p>
+<p><strong>GPU 对照实现</strong>：<code>&lt;待填：GPU 代码实现地址&gt;</code>（A100 侧数值取自该实现；有地址后本节补链接与 commit。）</p>
+<table>
+<thead>
+<tr>
+<th>档</th>
+<th style="text-align: right;">A100 锚（ms / sps）</th>
+<th style="text-align: right;"><strong>1.5× 目标</strong></th>
+<th style="text-align: right;">目标 sps</th>
+<th style="text-align: right;">目标 batch/s</th>
+<th style="text-align: right;">当前实测</th>
+<th style="text-align: right;">达成率</th>
+<th style="text-align: right;">缺口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td style="text-align: right;">10.00 / 204,800</td>
+<td style="text-align: right;"><strong>≤6.67 ms</strong></td>
+<td style="text-align: right;">307,200</td>
+<td style="text-align: right;">150.00</td>
+<td style="text-align: right;">7.44 ms / 275,000</td>
+<td style="text-align: right;">89.5%</td>
+<td style="text-align: right;"><strong>+0.77 ms（需 −10.4%）</strong></td>
+</tr>
+<tr>
+<td>A2</td>
+<td style="text-align: right;">17.70 / 925,696</td>
+<td style="text-align: right;"><strong>≤11.80 ms</strong></td>
+<td style="text-align: right;">1,388,544</td>
+<td style="text-align: right;">84.75</td>
+<td style="text-align: right;">16.13 ms / 1,015,600</td>
+<td style="text-align: right;">73.1%</td>
+<td style="text-align: right;"><strong>+4.33 ms（需 −26.8%）</strong></td>
+</tr>
+<tr>
+<td>A4¹</td>
+<td style="text-align: right;">110.13 / 1,190,128</td>
+<td style="text-align: right;"><strong>≤73.42 ms</strong></td>
+<td style="text-align: right;">1,785,192</td>
+<td style="text-align: right;">13.62</td>
+<td style="text-align: right;">62.30 ms / 2,104,000</td>
+<td style="text-align: right;"><strong>117.9%</strong></td>
+<td style="text-align: right;"><strong>已达标，余量 11.12 ms</strong></td>
+</tr>
+</tbody>
+</table>
+<p>¹ A4 的 A100 锚是 DCN v2（本实现 dot），非同模型，该档 1.5× 只作规模参考；A1/A2 与 A100 同为 dot、同每卡本地 batch，是可比的 1.5× 判据。</p>
+<p>目标从 2× 下调到 1.5× 之后，三档的处境差别很大：<strong>A4 不需要再优化</strong>（已 117.9%，余 11.12 ms 缓冲）；<strong>A1 只差 0.77 ms</strong>，且这 0.77 ms 全在固定项（§5.2 空转 12.02 ms 为主）；<strong>A2 差 4.33 ms</strong>，落在 §8「剩余可动项乐观合计 10–11 ms」的上限之内，但下限不保证 —— 1.5× 对 A2 是「够得着、不白送」。2× 目标保留为阶段二参考（A2 ≤8.85 ms）。</p>
+<p><strong>复核判据（待执行）</strong></p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>项</th>
+<th>判据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>环境</td>
+<td>950DT ×8 die · CANN 9.1.0 · <code>torch_rec_v2</code> 26.1.0 + <code>torchrec</code> 1.2.0+npu（不得换栈后直接引用本报告数字）</td>
+</tr>
+<tr>
+<td>2</td>
+<td>跑法</td>
+<td>A1/A2/A4 各 <strong>n≥3 交错</strong>、无 profiler runner、剔前 20 步、端到端口径（含 host 取数）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>通过线</td>
+<td>每档 <code>samples/s ≥ 1.5 × A100 同档</code>：A1 307,200 / A2 1,388,544 / A4 1,785,192（端到端）</td>
+</tr>
+<tr>
+<td>4</td>
+<td>配置面</td>
+<td><code>--unified-emb</code>（单表）+ A2/A4 <code>--ec-mode --index-dedup</code>、A1 用 EBC —— 按档选配置的行为需在 V2 接口下逐档复核</td>
+</tr>
+<tr>
+<td>5</td>
+<td>记录</td>
+<td>每档原始 step/prep/端到端 ms 与 sps、batch/s 落 <code>results/*.summary.txt</code>，并在 §4.1 口径下换算</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2">2. 评测条件与口径</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>并行方式</td>
+<td>8 die 单机 DMP（模型并行 + 数据并行），每卡本地 batch = global/8，两侧一致</td>
+</tr>
+<tr>
+<td>表放置</td>
+<td>26 表合 1 张统一表（id 区间互不重叠），行数 268,435,456，按行切分到 8 die</td>
+</tr>
+<tr>
+<td>优化器</td>
+<td>稠密 SGD；稀疏 Adagrad（row-wise）</td>
+</tr>
+<tr>
+<td>步时</td>
+<td>forward + backward + optimizer.step；起点为「拿到本步数据之后」，每步 synchronize 后计时</td>
+</tr>
+<tr>
+<td><strong>端到端</strong></td>
+<td><strong>步时 + host 取数</strong>（numpy 切片 → tensor → H2D）。A100 官方口径含取数，故对外一律给端到端</td>
+</tr>
+<tr>
+<td>统计</td>
+<td>多轮取 median，稳态剔除前 20 步；单次值只作方向判断</td>
+</tr>
+<tr>
+<td>噪声</td>
+<td>多租户节点，同配置不同批次波动 ±8~12%；A/B 一律交错多轮</td>
+</tr>
+<tr>
+<td>profiling</td>
+<td>阶段 0/1 用 msprof（含 AICPU/SDMA）；阶段 2/3 用 torch_npu.profiler（该配置下 msprof 段错误）；扰动 1.19–1.30×，只看占比</td>
+</tr>
+<tr>
+<td>换算</td>
+<td>每样本训练算力 17.1 MFLOPs；稀疏访存 15.8 KB/样本</td>
+</tr>
+<tr>
+<td><strong>吞吐 samples/s</strong></td>
+<td><code>global batch ÷ 该行时延</code>。<strong>8 die 合计，不是单卡</strong>（单卡除以 8）；A100 锚同为 8 卡合计</td>
+</tr>
+<tr>
+<td><strong>吞吐 batch/s</strong></td>
+<td><code>1000 ÷ 时延(ms)</code>，即每秒步数；恒等于 <code>samples/s ÷ global batch</code>。升 batch 时 batch/s 下降属正常</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-950-hkv-950-tbe-8a100">3. 三方对比：950-HKV / 950-TBE / 8×A100</h2>
+<h3 id="31-a100-vs-950-hkv-dot">3.1 A100 vs 950-HKV（同 dot 交互，端到端口径）</h3>
+<table>
+<thead>
+<tr>
+<th>档</th>
+<th style="text-align: right;">global</th>
+<th style="text-align: right;">每卡</th>
+<th style="text-align: right;">A100 ms</th>
+<th style="text-align: right;">A100 sps</th>
+<th style="text-align: right;"><strong>A100 batch/s</strong></th>
+<th style="text-align: right;">950 ms</th>
+<th style="text-align: right;">950 sps</th>
+<th style="text-align: right;"><strong>950 batch/s</strong></th>
+<th style="text-align: right;">占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td style="text-align: right;">2,048</td>
+<td style="text-align: right;">256</td>
+<td style="text-align: right;">10.00</td>
+<td style="text-align: right;">204,800</td>
+<td style="text-align: right;">100.00</td>
+<td style="text-align: right;">7.44</td>
+<td style="text-align: right;">275,000</td>
+<td style="text-align: right;"><strong>134.41</strong></td>
+<td style="text-align: right;"><strong>134.3%</strong></td>
+</tr>
+<tr>
+<td>A2</td>
+<td style="text-align: right;">16,384</td>
+<td style="text-align: right;">2,048</td>
+<td style="text-align: right;">17.70</td>
+<td style="text-align: right;">925,696</td>
+<td style="text-align: right;">56.50</td>
+<td style="text-align: right;">16.13</td>
+<td style="text-align: right;">1,015,600</td>
+<td style="text-align: right;"><strong>62.00</strong></td>
+<td style="text-align: right;"><strong>109.7%</strong></td>
+</tr>
+<tr>
+<td>A4¹</td>
+<td style="text-align: right;">131,072</td>
+<td style="text-align: right;">16,384</td>
+<td style="text-align: right;">110.13</td>
+<td style="text-align: right;">1,190,128</td>
+<td style="text-align: right;">9.08</td>
+<td style="text-align: right;">62.30</td>
+<td style="text-align: right;">2,104,000</td>
+<td style="text-align: right;"><strong>16.05</strong></td>
+<td style="text-align: right;"><strong>176.8%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>A1 用「统一表 + EBC」，A2/A4 用「统一表 + EC + dedup」，按档选配置（§4）。
+A1 两次独立测量：150 步 6.70+0.67=7.36 ms（135.8%）、200 步 6.92+0.52=7.44 ms（134.3%），属步时抖动；对外取保守的 7.44 ms。</p>
+<h3 id="32-step">3.2 纯 step 口径（不含取数，仅备查）</h3>
+<table>
+<thead>
+<tr>
+<th>档</th>
+<th style="text-align: right;">step ms</th>
+<th style="text-align: right;">prep ms</th>
+<th style="text-align: right;">纯 step 吞吐 sps</th>
+<th style="text-align: right;"><strong>纯 step batch/s</strong></th>
+<th style="text-align: right;">对 A100</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td style="text-align: right;">6.70–6.92</td>
+<td style="text-align: right;">0.52–0.67</td>
+<td style="text-align: right;">296,000–305,700</td>
+<td style="text-align: right;">144.51–149.25</td>
+<td style="text-align: right;">144.5–149.3%</td>
+<td>EBC 配置，n=3 最优 6.78 ms</td>
+</tr>
+<tr>
+<td>A2</td>
+<td style="text-align: right;">14.99</td>
+<td style="text-align: right;">1.14</td>
+<td style="text-align: right;">1,093,000</td>
+<td style="text-align: right;">66.71</td>
+<td style="text-align: right;">118.1%</td>
+<td>满 epoch（1,354 步）median</td>
+</tr>
+<tr>
+<td>A4</td>
+<td style="text-align: right;">56.60</td>
+<td style="text-align: right;">5.70</td>
+<td style="text-align: right;">2,315,000</td>
+<td style="text-align: right;">17.67</td>
+<td style="text-align: right;">194.5%</td>
+<td>四次 median 54.49/54.97/56.89/56.60</td>
+</tr>
+</tbody>
+</table>
+<p>对外只认 3.1 端到端值；本节仅用于与「纯 step」类指标对接，不可与 A100 官方口径混算。</p>
+<h3 id="33-ec-dedup">3.3 扩展曲线（统一表 + EC + dedup）</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">global</th>
+<th style="text-align: right;">每卡</th>
+<th style="text-align: right;">step ms</th>
+<th style="text-align: right;">prep ms</th>
+<th style="text-align: right;">端到端 ms</th>
+<th style="text-align: right;">吞吐 sps</th>
+<th style="text-align: right;"><strong>batch/s</strong></th>
+<th style="text-align: right;">µs/样本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">2,048</td>
+<td style="text-align: right;">256</td>
+<td style="text-align: right;">6.70</td>
+<td style="text-align: right;">0.67</td>
+<td style="text-align: right;">7.36</td>
+<td style="text-align: right;">278,111</td>
+<td style="text-align: right;"><strong>135.87</strong></td>
+<td style="text-align: right;">3.59</td>
+</tr>
+<tr>
+<td style="text-align: right;">16,384</td>
+<td style="text-align: right;">2,048</td>
+<td style="text-align: right;">14.70</td>
+<td style="text-align: right;">1.53</td>
+<td style="text-align: right;">16.23</td>
+<td style="text-align: right;">1,009,000</td>
+<td style="text-align: right;"><strong>61.61</strong></td>
+<td style="text-align: right;">0.99</td>
+</tr>
+<tr>
+<td style="text-align: right;">32,768</td>
+<td style="text-align: right;">4,096</td>
+<td style="text-align: right;">21.30</td>
+<td style="text-align: right;">2.99</td>
+<td style="text-align: right;">24.29</td>
+<td style="text-align: right;">1,349,000</td>
+<td style="text-align: right;"><strong>41.17</strong></td>
+<td style="text-align: right;">0.74</td>
+</tr>
+<tr>
+<td style="text-align: right;">65,536</td>
+<td style="text-align: right;">8,192</td>
+<td style="text-align: right;">29.52</td>
+<td style="text-align: right;">7.24</td>
+<td style="text-align: right;">36.76</td>
+<td style="text-align: right;">1,783,000</td>
+<td style="text-align: right;"><strong>27.20</strong></td>
+<td style="text-align: right;">0.56</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>131,072</strong></td>
+<td style="text-align: right;">16,384</td>
+<td style="text-align: right;">56.60</td>
+<td style="text-align: right;">5.70</td>
+<td style="text-align: right;">62.30</td>
+<td style="text-align: right;"><strong>2,104,000</strong></td>
+<td style="text-align: right;"><strong>16.05</strong></td>
+<td style="text-align: right;">0.47</td>
+</tr>
+</tbody>
+</table>
+<p>拟合（16k–131k）：<strong>步时 = 8.33 ms + 0.361 µs/样本</strong>，残差 +0.45/+1.13/−2.49/+0.91 ms。</p>
+<h3 id="34-a100">3.4 两档 A100 对照下的差距拆解</h3>
+<table>
+<thead>
+<tr>
+<th>档</th>
+<th style="text-align: right;">A100 ms</th>
+<th style="text-align: right;"><strong>1.5× 目标</strong></th>
+<th style="text-align: right;">950 当前</th>
+<th style="text-align: right;">距 1.5×</th>
+<th style="text-align: right;">2× 参考</th>
+<th>主要缺口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td style="text-align: right;">10.00</td>
+<td style="text-align: right;"><strong>6.67</strong></td>
+<td style="text-align: right;">7.36–7.44</td>
+<td style="text-align: right;">−9~−10%</td>
+<td style="text-align: right;">5.00</td>
+<td>固定开销占 62%，每卡仅 256 行摊不薄</td>
+</tr>
+<tr>
+<td>A2</td>
+<td style="text-align: right;">17.70</td>
+<td style="text-align: right;"><strong>11.80</strong></td>
+<td style="text-align: right;">16.13</td>
+<td style="text-align: right;"><strong>−26.8%</strong></td>
+<td style="text-align: right;">8.85</td>
+<td>wait+空隙 64%、通信 25%；矩阵乘仅 6.8%</td>
+</tr>
+</tbody>
+</table>
+<h3 id="35-950-tberecsdk-dlrm">3.5 950-TBE（RecSDK dlrm）实测</h3>
+<p>同 8 die、同一份 Criteo 1TB 切片（112.3 M 行，MLPerf 词表约 104 GiB 静态 TBE），RecSDK 版<strong>未做任何优化</strong>（仅跑通基线）。其交互为 MLPerf DCN v2、稀疏与稠密均 Adagrad，与本实现（dot）不同，故与 A100 只能按同交互对齐。</p>
+<table>
+<thead>
+<tr>
+<th>实现</th>
+<th>local / global</th>
+<th style="text-align: right;">交互 / 优化器</th>
+<th style="text-align: right;">步时</th>
+<th style="text-align: right;">吞吐 sps</th>
+<th style="text-align: right;"><strong>batch/s</strong></th>
+<th style="text-align: right;">AUROC</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recsdk-dlrm（TBE）</td>
+<td>256 / 2,048</td>
+<td style="text-align: right;">DCN v2 / Adagrad</td>
+<td style="text-align: right;">278 ms</td>
+<td style="text-align: right;"><strong>7,356</strong></td>
+<td style="text-align: right;"><strong>3.60</strong></td>
+<td style="text-align: right;">0.6945</td>
+</tr>
+<tr>
+<td>recsdk-dlrm（TBE）</td>
+<td>2,048 / 16,384</td>
+<td style="text-align: right;">DCN v2 / Adagrad</td>
+<td style="text-align: right;">261 ms</td>
+<td style="text-align: right;"><strong>62,690</strong></td>
+<td style="text-align: right;"><strong>3.83</strong></td>
+<td style="text-align: right;">0.7525</td>
+</tr>
+<tr>
+<td>8×A100（同配置）</td>
+<td>2,048 / 16,384</td>
+<td style="text-align: right;">DCN v2 / Adagrad</td>
+<td style="text-align: right;">18.2 ms</td>
+<td style="text-align: right;">901,120</td>
+<td style="text-align: right;">54.95</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td><strong>达成率（对 A100 同配置）</strong></td>
+<td>16,384 档</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;"><strong>7.0%</strong></td>
+<td style="text-align: right;"><strong>7.0%</strong></td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>固定开销主导</strong>：255–285 ms/步，与 batch（256 vs 2,048，差 8 倍）和表规模都几乎无关；1 die 上同样复现 185 ms ⇒ 不是通信带宽问题，而是 26 张表各自的算子链 + 每步 collective 的串行开销。</li>
+<li><strong>横向对照</strong>：同一台 950、同一份数据、同 local batch 下，HKV 版 62,690 → 1,015,600 sps（16.2×），256 档 7,356 → 275,000（37.4×）。</li>
+<li><strong>不能得出的结论</strong>：这 16–37× 混合了「交互不同（dot vs DCN v2）」「表机制不同（HKV 动态物化 vs 静态 TBE 全驻）」「优化器不同」「数据量不同（24.5 M vs 112.3 M 行）」四个变量，只能作为同机工程对比，不能拆成单一因素归因。</li>
+</ul>
+<h3 id="36-local-batch">3.6 三方横向（同机同数据同 local batch）</h3>
+<table>
+<thead>
+<tr>
+<th>local / global</th>
+<th style="text-align: right;">A100（dot）</th>
+<th style="text-align: right;">950-HKV（dot）</th>
+<th style="text-align: right;"><strong>HKV batch/s</strong></th>
+<th style="text-align: right;">950-TBE（DCN）</th>
+<th style="text-align: right;">HKV/TBE</th>
+<th style="text-align: right;">HKV/A100</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>256 / 2,048</td>
+<td style="text-align: right;">204,800</td>
+<td style="text-align: right;"><strong>275,000</strong></td>
+<td style="text-align: right;"><strong>134.41</strong></td>
+<td style="text-align: right;">7,356</td>
+<td style="text-align: right;">37.4×</td>
+<td style="text-align: right;"><strong>134.3%</strong></td>
+</tr>
+<tr>
+<td>2,048 / 16,384</td>
+<td style="text-align: right;">925,696</td>
+<td style="text-align: right;"><strong>1,015,600</strong></td>
+<td style="text-align: right;"><strong>62.00</strong></td>
+<td style="text-align: right;">62,690</td>
+<td style="text-align: right;">16.2×</td>
+<td style="text-align: right;"><strong>109.7%</strong></td>
+</tr>
+<tr>
+<td>16,384 / 131,072</td>
+<td style="text-align: right;">1,190,128¹</td>
+<td style="text-align: right;"><strong>2,104,000</strong></td>
+<td style="text-align: right;"><strong>16.05</strong></td>
+<td style="text-align: right;">未跑</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;"><strong>176.8%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>¹ A100 的 131,072 档为 DCN v2，与本实现 dot 非同模型，仅作规模参考。</p>
+<p><strong>读法</strong>：A100 列与本实现同为 dot，可直接比；TBE 为 DCN，与 A100-DCN（901,120）比才是同配置（7.0%）。三列并列是为了展示同机差距量级，不代表同模型。
+<strong>AUROC 不可横向比</strong>：三者为不同训练数据量（A100 4.19 B 行/epoch、TBE 112.3 M 行、HKV 24.5 M 行），且本实现 300 步截断；仅用于确认「不是随机」。</p>
+<h2 id="4-o1o18">4. 优化账本（O1–O18）</h2>
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>优化项</th>
+<th>结论</th>
+<th>实测 / 依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>O6</td>
+<td><strong>统一表</strong>（26→1，rows=268,435,456）</td>
+<td>有效</td>
+<td>A2 40.27→20.34 ms；查表反向 24×615 µs→1×3413 µs；task 536→173</td>
+</tr>
+<tr>
+<td>O7b</td>
+<td><strong>EC + index dedup</strong></td>
+<td>大 batch 有效</td>
+<td>A2 20.34→16.31 ms（n=3）；EC 无 dedup 62.41 ms ⇒ 收益来自 dedup</td>
+</tr>
+<tr>
+<td>O12</td>
+<td>取数固化（加载期 log1p + dtype）</td>
+<td>有效</td>
+<td>131k 档 prep 12.5→5.70 ms</td>
+</tr>
+<tr>
+<td>O14</td>
+<td>加大 batch（16,384→131,072）</td>
+<td>有效</td>
+<td>端到端 16.23→62.30 ms，吞吐 1.01→2.10 M sps（2.08×）</td>
+</tr>
+<tr>
+<td>O13</td>
+<td>TASK_QUEUE_ENABLE=2</td>
+<td>按档</td>
+<td>A2 +2.7%；A4 两批 +2.0%/−2.9%，方向不稳</td>
+</tr>
+<tr>
+<td>O7c</td>
+<td>局部图捕获（只稠密段）</td>
+<td>备选</td>
+<td>上限约 1.3 ms，暂不做</td>
+</tr>
+<tr>
+<td>O11</td>
+<td>表行数去 2 的幂</td>
+<td>待测</td>
+<td>可省 32 GiB 表内存 + 4 GiB/die；<code>--unified-align batch</code> 已实现未上机</td>
+</tr>
+<tr>
+<td>O18</td>
+<td>减少 all2all 实例（计数对齐）</td>
+<td>观察</td>
+<td>A4 约 100 个形状特化 kernel 名，alltoall 18.5 ms/步；上限 4–6 ms</td>
+</tr>
+<tr>
+<td>O1</td>
+<td>逐步同步节奏（1/2/4/8/50）</td>
+<td>无效</td>
+<td>差 &lt;1.2 ms；sync=50 +49%</td>
+</tr>
+<tr>
+<td>O2</td>
+<td>dist-type roundrobin</td>
+<td>否决</td>
+<td>A1 +8.6%、A2 +1.8%（n=3 推翻单次 −3.7%）</td>
+</tr>
+<tr>
+<td>O3</td>
+<td>frozen-data</td>
+<td>仅诊断</td>
+<td>取数上限探针，不作方案</td>
+</tr>
+<tr>
+<td>O4</td>
+<td>hbm-gb 加大</td>
+<td>否决</td>
+<td>无收益</td>
+</tr>
+<tr>
+<td>O5</td>
+<td>batch 32,768 对照 A100</td>
+<td>不可比</td>
+<td>A100 无对应档</td>
+</tr>
+<tr>
+<td>O7a</td>
+<td>整步 NPUGraph 捕获</td>
+<td>不可行</td>
+<td>稀疏路径含 H2D → 107030</td>
+</tr>
+<tr>
+<td>O8</td>
+<td>合并 collective</td>
+<td>降级</td>
+<td>统一表后通信并集仅 1.69 ms</td>
+</tr>
+<tr>
+<td>O15</td>
+<td>all2all 载荷 bf16</td>
+<td>变差</td>
+<td>64k 档 29.52→34.23 ms（+16%）</td>
+</tr>
+<tr>
+<td>O16</td>
+<td>HCCL_OP_EXPANSION_MODE=AIV</td>
+<td>无效</td>
+<td>A4 57.78→58.52 ms（噪声内）</td>
+</tr>
+<tr>
+<td>O17</td>
+<td>HCCL_BUFFSIZE=1024</td>
+<td>显著变差</td>
+<td>A4 57.78→67.29 ms（+16%）</td>
+</tr>
+</tbody>
+</table>
+<p>有效项 4 个；按档组合：<strong>A1 = 统一表 + EBC</strong>，<strong>A2/A4 = 统一表 + EC + dedup</strong>。</p>
+<h3 id="41-sampless-batchs">4.1 收益的吞吐口径（samples/s 与 batch/s）</h3>
+<p>收益不只看 ms，按吞吐再看一遍（数值由各行原始 ms 换算，未引入新测量）：</p>
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>优化项</th>
+<th>档</th>
+<th style="text-align: right;">前 → 后 ms</th>
+<th style="text-align: right;">Δ%</th>
+<th style="text-align: right;">samples/s 前 → 后</th>
+<th style="text-align: right;">batch/s 前 → 后</th>
+<th>口径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>O6</td>
+<td>统一表（26→1）</td>
+<td>A1 · 2,048</td>
+<td style="text-align: right;">21.192 → 6.781</td>
+<td style="text-align: right;">−68.0%</td>
+<td style="text-align: right;">96,640 → <strong>302,020</strong></td>
+<td style="text-align: right;">47.19 → <strong>147.47</strong></td>
+<td>纯 step，n=3</td>
+</tr>
+<tr>
+<td>O6</td>
+<td>统一表（26→1）</td>
+<td>A2 · 16,384</td>
+<td style="text-align: right;">40.269 → 20.342</td>
+<td style="text-align: right;">−49.5%</td>
+<td style="text-align: right;">406,864 → <strong>805,427</strong></td>
+<td style="text-align: right;">24.83 → <strong>49.16</strong></td>
+<td>纯 step，n=3</td>
+</tr>
+<tr>
+<td>O7b</td>
+<td>EC + index dedup</td>
+<td>A2 · 16,384</td>
+<td style="text-align: right;">20.342 → 16.309</td>
+<td style="text-align: right;">−19.8%</td>
+<td style="text-align: right;">805,427 → <strong>1,004,599</strong></td>
+<td style="text-align: right;">49.16 → <strong>61.32</strong></td>
+<td>纯 step，n=3</td>
+</tr>
+<tr>
+<td>O7b 反例</td>
+<td>同配置用在 A1</td>
+<td>A1 · 2,048</td>
+<td style="text-align: right;">6.781 → 9.890</td>
+<td style="text-align: right;">+45.8%（变慢）</td>
+<td style="text-align: right;">302,020 → <strong>207,078</strong></td>
+<td style="text-align: right;">147.47 → <strong>101.11</strong></td>
+<td>纯 step，n=3</td>
+</tr>
+<tr>
+<td>O12</td>
+<td>取数固化（log1p + dtype）</td>
+<td>A4 · 131,072</td>
+<td style="text-align: right;">12.46 → 5.70</td>
+<td style="text-align: right;">−54.3%</td>
+<td style="text-align: right;">10,519,422 → <strong>22,995,088</strong></td>
+<td style="text-align: right;">80.26 → <strong>175.44</strong></td>
+<td><strong>取数段</strong>，非步时</td>
+</tr>
+<tr>
+<td>O14</td>
+<td>本地 batch 16,384 → 131,072</td>
+<td>A2 → A4</td>
+<td style="text-align: right;">16.23 → 62.30</td>
+<td style="text-align: right;">吞吐 2.08×</td>
+<td style="text-align: right;">1,009,489 → <strong>2,103,884</strong></td>
+<td style="text-align: right;">61.61 → <strong>16.05</strong></td>
+<td>端到端（跨档）</td>
+</tr>
+</tbody>
+</table>
+<p>三条读法：</p>
+<ol>
+<li><strong>O14 那行 batch/s 是降的</strong>（61.61→16.05）：batch 大 8 倍、每秒步数降 3.8 倍，吞吐仍升 2.08× —— 判吞吐看 samples/s，不看 batch/s。</li>
+<li><strong>O12 是取数段口径</strong>（prep 12.46→5.70 ms），其 22.99 M sps 只描述取数段等效，不能与整步吞吐并列。</li>
+<li><strong>纯 step 与端到端不互算</strong>：本表 O6/O7b 为纯 step，O14 为端到端；A2 的端到端主口径见 §3.1（16.13 ms→1,015,600 sps→62.00 batch/s）。</li>
+</ol>
+<h2 id="5">5. 时间去哪了（四阶段）</h2>
+<h3 id="51-26-a2msprofwall-429-ms">5.1 基线：26 张表（A2，msprof，wall 42.9 ms）</h3>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th style="text-align: right;">ms/步</th>
+<th style="text-align: right;">占 wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查表反向（24 次 × 615 µs）</td>
+<td style="text-align: right;"><strong>15.05</strong></td>
+<td style="text-align: right;">35.1%</td>
+</tr>
+<tr>
+<td>设备空转</td>
+<td style="text-align: right;">12.80</td>
+<td style="text-align: right;">29.8%</td>
+</tr>
+<tr>
+<td>HCCL</td>
+<td style="text-align: right;">9.51</td>
+<td style="text-align: right;">22.2%</td>
+</tr>
+<tr>
+<td>其它算子</td>
+<td style="text-align: right;">5.54</td>
+<td style="text-align: right;">12.9%</td>
+</tr>
+</tbody>
+</table>
+<div class="bar"><span class="b1" style="width:35.1%">查表反向 15.05</span><span class="b2" style="width:29.8%">空转 12.80</span><span class="b3" style="width:22.2%">HCCL 9.51</span><span class="b4" style="width:12.9%">其它 5.54</span></div>
+<div class="legend"><i class="b1"></i>查表反向<i class="b2"></i>设备空转<i class="b3"></i>HCCL<i class="b4"></i>其它算子</div>
+
+<h3 id="52-a2-252-ms">5.2 统一表后（A2，窗口 25.2 ms）</h3>
+<table class="narrow">
+<thead>
+<tr>
+<th>类别</th>
+<th style="text-align: right;">ms/步</th>
+<th style="text-align: right;">占 wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>空转</td>
+<td style="text-align: right;"><strong>12.02</strong></td>
+<td style="text-align: right;">47.7%</td>
+</tr>
+<tr>
+<td>等待（NOTIFY/EVENT）</td>
+<td style="text-align: right;">8.15</td>
+<td style="text-align: right;">32.3%</td>
+</tr>
+<tr>
+<td>计算</td>
+<td style="text-align: right;">6.62</td>
+<td style="text-align: right;">26.3%</td>
+</tr>
+<tr>
+<td>AICPU</td>
+<td style="text-align: right;">2.07</td>
+<td style="text-align: right;">8.2%</td>
+</tr>
+<tr>
+<td>通信（并集）</td>
+<td style="text-align: right;">1.69</td>
+<td style="text-align: right;">6.7%</td>
+</tr>
+</tbody>
+</table>
+<div class="bar"><span class="b2" style="width:47.7%">空转 12.02</span><span class="b1" style="width:32.3%">等待 8.15</span><span class="b5" style="width:26.3%">计算 6.62</span><span class="b4" style="width:8.2%">2.07</span><span class="b3" style="width:6.7%">1.69</span></div>
+<div class="legend"><i class="b2"></i>空转<i class="b1"></i>等待（NOTIFY/EVENT）<i class="b5"></i>计算<i class="b4"></i>AICPU 2.07 ms<i class="b3"></i>通信 1.69 ms（并集）</div>
+
+<h3 id="53-ec-dedupa2-215-ms">5.3 EC + dedup（A2，窗口 21.5 ms）</h3>
+<table>
+<thead>
+<tr>
+<th>算子/类别</th>
+<th style="text-align: right;">每次</th>
+<th style="text-align: right;">次数</th>
+<th style="text-align: right;">合计 ms/步</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>hcom_alltoallv（4 实例）</td>
+<td style="text-align: right;">≈455 µs</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">1.82</td>
+</tr>
+<tr>
+<td>hcom_alltoall</td>
+<td style="text-align: right;">1752 µs</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1.75</td>
+</tr>
+<tr>
+<td>hcom_allReduce</td>
+<td style="text-align: right;">643 µs</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0.64</td>
+</tr>
+<tr>
+<td>HcclLaunchAicpuKernel</td>
+<td style="text-align: right;">206 µs</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">1.23</td>
+</tr>
+<tr>
+<td>MatMulV3（Mm+Addmm）</td>
+<td style="text-align: right;">57–66 µs</td>
+<td style="text-align: right;">22</td>
+<td style="text-align: right;">1.38</td>
+</tr>
+<tr>
+<td>Sort/InplaceIndexAdd/hkv/BatchMatMul</td>
+<td style="text-align: right;">26–81 µs</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0.41</td>
+</tr>
+<tr>
+<td>其它</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">~130</td>
+<td style="text-align: right;">≈0.5</td>
+</tr>
+</tbody>
+</table>
+<div class="bar"><span class="b2" style="width:64.0%">wait + 空隙 13.8</span><span class="b3" style="width:25.3%">通信 5.44</span><span class="b5" style="width:10.7%">计算 2.30</span></div>
+<div class="legend"><i class="b2"></i>wait/空隙<i class="b3"></i>通信<i class="b5"></i>计算</div>
+
+<p>汇总：通信 25.3% / 计算 10.7% / wait+空隙 64.0%；kernel 536→173；查表反向 3.41→0.081 ms。</p>
+<h3 id="54-ec-dedupa4-737-ms">5.4 EC + dedup（A4，窗口 73.7 ms）</h3>
+<table>
+<thead>
+<tr>
+<th>算子/类别</th>
+<th style="text-align: right;">每次</th>
+<th style="text-align: right;">次数</th>
+<th style="text-align: right;">合计 ms/步</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MatMulV3（Mm）</td>
+<td style="text-align: right;">491 µs</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">6.87</td>
+</tr>
+<tr>
+<td>MatMulV3（Addmm）</td>
+<td style="text-align: right;">423 µs</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">3.39</td>
+</tr>
+<tr>
+<td>alltoall / alltoallv（约 100 个实例名）</td>
+<td style="text-align: right;">0.6–1.0 ms</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">18.49</td>
+</tr>
+<tr>
+<td>InplaceIndexAdd/BatchMatMul/HcclLaunch</td>
+<td style="text-align: right;">193–479 µs</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">2.77</td>
+</tr>
+</tbody>
+</table>
+<div class="bar"><span class="b2" style="width:44.4%">wait + 空隙 32.8</span><span class="b3" style="width:25.1%">通信 18.49</span><span class="b4" style="width:16.6%">其它 12.24</span><span class="b5" style="width:13.9%">矩阵乘 10.26</span></div>
+<div class="legend"><i class="b2"></i>wait/空隙<i class="b3"></i>通信<i class="b4"></i>其它 kernel<i class="b5"></i>MatMul/BatchMatMul</div>
+
+<p>汇总：通信 25.1% / 矩阵乘 13.9% / 其它 16.6% / 空隙 44.4%。</p>
+<h2 id="6">6. 硬件利用率</h2>
+<h3 id="61">6.1 算子级</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">A2</th>
+<th style="text-align: right;">A4</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MatMulV3 cube_utilization</td>
+<td style="text-align: right;"><strong>91.3%</strong>（峰 99.5%）</td>
+<td style="text-align: right;">≈91%</td>
+<td>算子接近理论上限</td>
+</tr>
+<tr>
+<td>aic_mac_ratio</td>
+<td style="text-align: right;">0.77</td>
+<td style="text-align: right;">≈0.77</td>
+<td>MAC 占 Cube 时间 77%</td>
+</tr>
+<tr>
+<td>矩阵乘占窗口</td>
+<td style="text-align: right;">6.8%</td>
+<td style="text-align: right;">13.9%</td>
+<td>稠密侧不是主要开销</td>
+</tr>
+<tr>
+<td>通信占窗口</td>
+<td style="text-align: right;">25%</td>
+<td style="text-align: right;">25%</td>
+<td>all2all 为主</td>
+</tr>
+<tr>
+<td>wait + 空隙</td>
+<td style="text-align: right;"><strong>64%</strong></td>
+<td style="text-align: right;"><strong>44%</strong></td>
+<td>等前驱/等对端/下发断档</td>
+</tr>
+</tbody>
+</table>
+<h3 id="62-npu-smi">6.2 整机级（宿主 npu-smi）</h3>
+<table>
+<thead>
+<tr>
+<th>采样方式</th>
+<th style="text-align: right;">AICore</th>
+<th style="text-align: right;">峰值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练对齐（等 ep0 step 后采，0.5 s 间隔）</td>
+<td style="text-align: right;"><strong>4.84%</strong></td>
+<td style="text-align: right;">17%</td>
+<td>与理论占空 6.2% 一致</td>
+</tr>
+<tr>
+<td>早期采样（启动后 35 s 起采 30 s）</td>
+<td style="text-align: right;">2.9%</td>
+<td style="text-align: right;">14%</td>
+<td><strong>作废</strong>：窗口覆盖加载与收尾</td>
+</tr>
+</tbody>
+</table>
+<p>AIVector 0.6%（峰值 3%）、AICPU 0.1%、HBM 带宽 0%（= 峰值 0.27%）。</p>
+<h3 id="63-hbm-0">6.3 HBM 带宽为什么显示 0%</h3>
+<table>
+<thead>
+<tr>
+<th>探针</th>
+<th style="text-align: right;">实测带宽</th>
+<th style="text-align: right;">npu-smi HBM</th>
+<th style="text-align: right;">npu-smi AICore</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>copy_ 2 GiB × 11,000 次（14.26 s）</td>
+<td style="text-align: right;">3,313 GB/s</td>
+<td style="text-align: right;">76–77%</td>
+<td style="text-align: right;">99%</td>
+</tr>
+<tr>
+<td>add 2 GiB（out=）</td>
+<td style="text-align: right;">4,738 GB/s</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table>
+<p>反推 100% ≈ 4,300 GB/s/die。DLRM 每 die 每步约 173 MB（稀疏 2.4 + 权重 41 + 激活 130）/ 15 ms ≈ <strong>11.5 GB/s = 0.27%</strong> ⇒ 整数百分比显示 0%。带宽不是约束。</p>
+<h3 id="64">6.4 表规模与内存</h3>
+<table class="narrow">
+<thead>
+<tr>
+<th>项</th>
+<th style="text-align: right;">值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>行数（对齐后 / 原始）</td>
+<td style="text-align: right;">268,435,456 / 204,222,464</td>
+<td>对齐白占 32 GiB（31.4%），4 GiB/die</td>
+</tr>
+<tr>
+<td>表本体（128 维 fp32）</td>
+<td style="text-align: right;">128 GiB → 16 GiB/die</td>
+<td>8 die 行切分</td>
+</tr>
+<tr>
+<td>Adagrad 状态（16 float/行）</td>
+<td style="text-align: right;">16 GiB → 2 GiB/die</td>
+<td>row-wise</td>
+</tr>
+<tr>
+<td>embedding 单 die 合计</td>
+<td style="text-align: right;"><strong>≈18 GiB / 96 GiB（19%）</strong></td>
+<td>能上 131,072 的前提</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7">7. 归因</h2>
+<h3 id="71">7.1 已坐实</h3>
+<ul>
+<li>查表不再是瓶颈：24 次（15.05 ms）→ 1 次（0.081 ms）。</li>
+<li>通信稳定 25%：每步 5 次 all2all（@A4 ≈18.5 ms）+ 6 次 HcclLaunch 1.23 ms 纯发射。</li>
+<li>wait + 空隙最大：A2 64%、A4 44%。</li>
+<li>算子无空间：Cube 91.3%、MAC 比 0.77。</li>
+<li>带宽无空间：0.27% 占用；bf16 化更慢（O15 +16%）。</li>
+<li>TBE 侧瓶颈是每步固定开销：255–285 ms 与 batch、表规模无关（1 die 185 ms）⇒ 26 张表算子链 + 每步 collective 串行；HKV 批量化查表后 15 ms，是 16–37× 差距主因（§3.5）。</li>
+</ul>
+<h3 id="72">7.2 推测（未坐实）</h3>
+<ul>
+<li>【推测】A4 档 all2all 约 100 个形状特化 kernel 名，说明分块随 dedup 后 id 数变化，可能触发重编译/重下发；计数对齐可减 4–6 ms。</li>
+<li>【推测】各 rank dedup 后 id 数不均衡导致 all2all straggler，是 wait 来源之一；未取逐 rank 分布。</li>
+</ul>
+<h2 id="8">8. 剩余空间与下一步</h2>
+<table>
+<thead>
+<tr>
+<th>可动项</th>
+<th style="text-align: right;">上限</th>
+<th>当前</th>
+<th>前置条件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>通信与计算重叠</td>
+<td style="text-align: right;">~5 ms</td>
+<td>已试 −4%（单次）</td>
+<td>需 n=3；A4 无效</td>
+</tr>
+<tr>
+<td>减少 all2all 实例</td>
+<td style="text-align: right;">4–6 ms</td>
+<td>18.5 ms（A4）</td>
+<td>改 dynamic_emb</td>
+</tr>
+<tr>
+<td>rank 间负载均衡</td>
+<td style="text-align: right;">2–4 ms</td>
+<td>未知</td>
+<td>先取逐 rank 计数</td>
+</tr>
+<tr>
+<td>合并 collective</td>
+<td style="text-align: right;">~1.2 ms</td>
+<td>1.23 ms</td>
+<td>收益已很小</td>
+</tr>
+<tr>
+<td>算子优化</td>
+<td style="text-align: right;">≈0</td>
+<td>Cube 91.3%</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>合计乐观 10–11 ms（A2 端到端）≈1.5× 当前、1.6–1.7× A100，仍不到 2×（8.85 ms）。结构性原因：每卡每步仅 2,048 行，固定开销 8.33 ms 占 51%。</p>
+<p><strong>按 1.5× 目标重读（2026-11-20）</strong>：A2 只需 <strong>−4.33 ms</strong>（16.13 → ≤11.80）、A1 只需 <strong>−0.77 ms</strong>（7.44 → ≤6.67）、A4 已达标（62.30 ≤ 73.42，余 11.12 ms）。即 10–11 ms 的乐观上限里只要落地<strong>不到一半</strong>即可覆盖 1.5×；但 A2 的 4.33 ms 必须来自真实 kernel/通信改动（P1 查表、P4 collective 合并），单纯调参已被 §9 全部排除。2× 仍属结构性目标。</p>
+<h2 id="9">9. 已验证无效</h2>
+<table class="narrow">
+<thead>
+<tr>
+<th>项</th>
+<th>结论</th>
+<th>实测</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>逐步同步节奏</td>
+<td>无效</td>
+<td>&lt;1.2 ms；sync=50 +49%</td>
+</tr>
+<tr>
+<td>dist-type roundrobin</td>
+<td>无效</td>
+<td>A1 +8.6%、A2 +1.8%</td>
+</tr>
+<tr>
+<td>all2all bf16</td>
+<td>变差</td>
+<td>+16%</td>
+</tr>
+<tr>
+<td>HCCL_OP_EXPANSION_MODE=AIV</td>
+<td>无效</td>
+<td>噪声内</td>
+</tr>
+<tr>
+<td>HCCL_BUFFSIZE=1024</td>
+<td>变差</td>
+<td>+16%</td>
+</tr>
+<tr>
+<td>整步 NPUGraph 捕获</td>
+<td>不可行</td>
+<td>107030</td>
+</tr>
+<tr>
+<td>TASK_QUEUE_ENABLE=2</td>
+<td>按档</td>
+<td>A2 +2.7%；A4 不稳</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10">10. 复现与数据位置</h2>
+<table>
+<thead>
+<tr>
+<th>内容</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练入口</td>
+<td><code>dlrm_v2_train.py</code>（<code>--unified-emb --ec-mode --index-dedup --pyprof</code>）</td>
+</tr>
+<tr>
+<td>单步 profile</td>
+<td><code>profiling/stage0_a2_16384.*</code>、<code>stage1_unified_a2_16384.md</code>、<code>stage2_ec_dedup_a2.md</code>、<code>stage1_utilization.md</code></td>
+</tr>
+<tr>
+<td>各档原始值</td>
+<td><code>results/dlrm950_unified_emb_anchor.txt</code>、<code>dlrm950_ec_dedup_anchor.txt</code>、<code>dlrm950_batch_scaling_anchor.txt</code></td>
+</tr>
+<tr>
+<td>优化账本 / 目标</td>
+<td><code>OPTIMIZATIONS.md</code>（O1–O18）、<code>OPERATIONS.md</code></td>
+</tr>
+<tr>
+<td>解析工具</td>
+<td><code>tools/parse_window.py</code>、<code>tools/parse_kernel_details.py</code></td>
+</tr>
+<tr>
+<td>HKV 基线对照（RecSDK TBE）</td>
+<td>MLPerf 词表 + <code>LOCAL_BS</code> 环境变量，原始三条对照见 <code>results/dlrm_950_criteo1tb_vs_gpu.txt</code></td>
+</tr>
+<tr>
+<td>仓库</td>
+<td><code>github.com/xiaomingyao/dlrm</code>（private）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11">11. 修订记录</h2>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th>变更</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v1</td>
+<td>优化报告初版（A1/A2 对 A100、优化路径、无效项）</td>
+</tr>
+<tr>
+<td>v2</td>
+<td>补 A4 档、扩展曲线、TASK_QUEUE A/B、硬件利用率</td>
+</tr>
+<tr>
+<td>diag rev3</td>
+<td>诊断：四阶段分解、AICore 口径更正 4.84%、HBM 0% 标定、表规模、满 epoch 复测</td>
+</tr>
+<tr>
+<td><strong>合并版 v3</strong></td>
+<td>优化 + 诊断合为一份：11 章，端到端为主口径，补差距拆解与 A4 机理</td>
+</tr>
+<tr>
+<td><strong>v4</strong></td>
+<td>按三方重写对比章：新增 §3.5 950-TBE（RecSDK）实测、§3.6 三方横向；§1 加 TBE 数据与判断；§7 补 TBE 固定开销归因；§10 补 TBE 复现入口</td>
+</tr>
+<tr>
+<td><strong>v5</strong></td>
+<td>全表补 <code>batch/s</code>（§1/§3.1/§3.2/§3.3/§3.5/§3.6），新增 §2 吞吐口径两行与 §4.1 收益吞吐表；原始 ms、百分比、结论未改</td>
+</tr>
+<tr>
+<td><strong>v6（本版）</strong></td>
+<td>目标口径 2× → <strong>1.5× A100</strong>，复核环境明确为 950DT ×8 + TorchRec V2；新增 §1.1（目标表 / 复核判据 / GPU 对照实现地址）；§1 判断行、§3.4 差距表、§8 结论按 1.5× 重读。实测数字未改</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>
